@@ -1,10 +1,16 @@
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import { ImageBackground, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useRouter } from 'expo-router';
+import { useCallback, useEffect, useState } from 'react';
+import { ImageBackground, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 
-import { brand, communityWins, events, heroImage, user } from '@/constants/data';
+import { TownTherapyLogo } from '@/components/TownTherapyLogo';
+import { brand, communityWins, heroImage, user } from '@/constants/data';
 import { Colors, Radius, Spacing } from '@/constants/theme';
 import { SectionHeader } from '@/components/SectionHeader';
+import { useVolunteer } from '@/context/VolunteerContext';
+import { api, formatEventDateParts } from '@/lib/api';
+import type { DashboardStats, Event } from '@/types/database';
 
 function StatCard({ value, label }: { value: number; label: string }) {
   return (
@@ -15,16 +21,16 @@ function StatCard({ value, label }: { value: number; label: string }) {
   );
 }
 
-function QuickReportButton() {
+function QuickReportButton({ onPress }: { onPress: () => void }) {
   return (
-    <Pressable style={styles.quickReport}>
+    <Pressable style={styles.quickReport} onPress={onPress}>
       <View style={styles.quickIcon}>
         <Ionicons name="add" size={22} color={Colors.primary} />
       </View>
       <View style={styles.quickText}>
         <Text style={styles.quickTitle}>Quick Report</Text>
         <Text style={styles.quickSubtitle}>
-          Spot an issue nearby? Take a photo, tag it, and act.
+          Report civic issues with geotagging — public safety & SOS at the bottom.
         </Text>
       </View>
       <Ionicons name="chevron-forward" size={20} color={Colors.white} />
@@ -32,19 +38,24 @@ function QuickReportButton() {
   );
 }
 
-function EventCarouselCard({ event }: { event: (typeof events)[0] }) {
+function EventCarouselCard({ event, onPress }: { event: Event; onPress: () => void }) {
+  const { date, month, time } = formatEventDateParts(event.starts_at);
+
   return (
-    <Pressable style={styles.eventCard}>
-      <ImageBackground source={{ uri: event.image }} style={styles.eventImage} imageStyle={styles.eventImageInner}>
+    <Pressable style={styles.eventCard} onPress={onPress}>
+      <ImageBackground
+        source={{ uri: event.image_url ?? undefined }}
+        style={styles.eventImage}
+        imageStyle={styles.eventImageInner}>
         <LinearGradient colors={['transparent', 'rgba(0,0,0,0.75)']} style={styles.eventGradient}>
           <View style={styles.dateBadge}>
-            <Text style={styles.dateDay}>{event.date}</Text>
-            <Text style={styles.dateMonth}>{event.month}</Text>
+            <Text style={styles.dateDay}>{date}</Text>
+            <Text style={styles.dateMonth}>{month}</Text>
           </View>
           <View style={styles.eventInfo}>
             <Text style={styles.eventTitle}>{event.title}</Text>
             <Text style={styles.eventMeta}>
-              {event.time} · {event.location}
+              {time} · {event.location_label}
             </Text>
           </View>
         </LinearGradient>
@@ -76,30 +87,81 @@ function CommunityWinCard({ win }: { win: (typeof communityWins)[0] }) {
 }
 
 export default function HomeScreen() {
+  const router = useRouter();
+  const { guestId, refresh: refreshVolunteer } = useVolunteer();
+  const [upcomingEvents, setUpcomingEvents] = useState<Event[]>([]);
+  const [dashboardStats, setDashboardStats] = useState<DashboardStats>(user.dashboard);
+  const [refreshing, setRefreshing] = useState(false);
+
+  const loadHomeData = useCallback(async () => {
+    const [events, stats] = await Promise.all([
+      api.listEvents(guestId, false),
+      api.getDashboardStats(),
+    ]);
+    setUpcomingEvents(events.slice(0, 5));
+    setDashboardStats(stats);
+  }, [guestId]);
+
+  useEffect(() => {
+    loadHomeData();
+  }, [loadHomeData]);
+
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await Promise.all([loadHomeData(), refreshVolunteer()]);
+    } finally {
+      setRefreshing(false);
+    }
+  }, [loadHomeData, refreshVolunteer]);
+
   return (
-    <ScrollView style={styles.container} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+    <ScrollView
+      style={styles.container}
+      contentContainerStyle={styles.content}
+      showsVerticalScrollIndicator={false}
+      refreshControl={
+        <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={Colors.primary} />
+      }>
       <ImageBackground source={{ uri: heroImage }} style={styles.hero}>
-        <LinearGradient colors={['rgba(0,0,0,0.35)', 'rgba(0,0,0,0.65)']} style={styles.heroGradient}>
+        <LinearGradient
+          colors={['rgba(45, 79, 79, 0.55)', 'rgba(36, 63, 63, 0.9)']}
+          style={styles.heroGradient}>
+          <View style={styles.heroBrandRow}>
+            <TownTherapyLogo size={56} withShadow />
+            <View style={styles.heroBrandText}>
+              <Text style={styles.brandName}>{brand.name}</Text>
+              <Text style={styles.brandTagline}>{brand.tagline}</Text>
+            </View>
+          </View>
           <Text style={styles.greeting}>Hi {user.greeting} 👋</Text>
           <Text style={styles.heroTitle}>{brand.headline}</Text>
           <Text style={styles.motto}>{brand.motto}</Text>
           <View style={styles.statsRow}>
-            <StatCard value={user.dashboard.issues} label="Issues" />
-            <StatCard value={user.dashboard.resolved} label="Resolved" />
-            <StatCard value={user.dashboard.neighbors} label="Neighbors" />
+            <StatCard value={dashboardStats.issues} label="Issues" />
+            <StatCard value={dashboardStats.resolved} label="Resolved" />
+            <StatCard value={dashboardStats.neighbors} label="Neighbors" />
           </View>
         </LinearGradient>
       </ImageBackground>
 
       <View style={styles.body}>
-        <QuickReportButton />
+        <QuickReportButton onPress={() => router.push('/report/new')} />
 
         <SectionHeader title="Upcoming events" />
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.eventsScroll}>
-          {events.map((event) => (
-            <EventCarouselCard key={event.id} event={event} />
-          ))}
-        </ScrollView>
+        {upcomingEvents.length === 0 ? (
+          <Text style={styles.eventsEmpty}>No upcoming events yet. Pull down to refresh.</Text>
+        ) : (
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.eventsScroll}>
+            {upcomingEvents.map((event) => (
+              <EventCarouselCard
+                key={event.id}
+                event={event}
+                onPress={() => router.push(`/event/${event.id}`)}
+              />
+            ))}
+          </ScrollView>
+        )}
 
         <SectionHeader title="Community wins" />
         {communityWins.map((win) => (
@@ -125,6 +187,26 @@ const styles = StyleSheet.create({
     flex: 1,
     padding: Spacing.lg,
     justifyContent: 'flex-end',
+  },
+  heroBrandRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.md,
+    marginBottom: Spacing.lg,
+  },
+  heroBrandText: {
+    flex: 1,
+  },
+  brandName: {
+    color: Colors.white,
+    fontSize: 22,
+    fontWeight: '800',
+    letterSpacing: 0.4,
+  },
+  brandTagline: {
+    color: 'rgba(255,255,255,0.88)',
+    fontSize: 13,
+    marginTop: 2,
   },
   greeting: {
     color: Colors.white,
@@ -205,6 +287,11 @@ const styles = StyleSheet.create({
   eventsScroll: {
     gap: Spacing.md,
     paddingBottom: Spacing.lg,
+  },
+  eventsEmpty: {
+    color: Colors.textSecondary,
+    fontSize: 14,
+    marginBottom: Spacing.lg,
   },
   eventCard: {
     width: 280,

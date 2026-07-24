@@ -1,6 +1,8 @@
 export const Colors = {
-  primary: '#0B6B44',
-  primaryDark: '#084F33',
+  /** Town Therapy brand identity */
+  primary: '#2D4F4F',
+  primaryDark: '#243F3F',
+  primaryLight: '#3A6565',
   background: '#F9F8F3',
   card: '#F3EDE3',
   cardLight: '#FAF7F2',
@@ -11,11 +13,11 @@ export const Colors = {
   border: '#E8E2D8',
   orange: '#E8874A',
   orangeLight: '#FDF0E6',
-  greenLight: '#E8F5EE',
+  greenLight: '#E8EFEF',
   red: '#C0392B',
   redLight: '#FCEAE8',
   pinkLight: '#FCE8EC',
-  tealLight: '#E5F4F1',
+  tealLight: '#E0EBEB',
   goldLight: '#FDF6E3',
   locked: '#D5D0C8',
 };

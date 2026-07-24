@@ -71,7 +71,7 @@ const styles = StyleSheet.create({
   title: {
     fontSize: 18,
     fontWeight: '700',
-    color: Colors.text,
+    color: Colors.primary,
   },
   action: {
     fontSize: 14,
@@ -85,8 +85,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.lg,
     paddingTop: Spacing.lg,
     paddingBottom: Spacing.md,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.border,
+    backgroundColor: Colors.white,
+    borderBottomWidth: 3,
+    borderBottomColor: Colors.primary,
   },
   headerText: {
     flex: 1,
@@ -95,7 +96,7 @@ const styles = StyleSheet.create({
   screenTitle: {
     fontSize: 26,
     fontWeight: '700',
-    color: Colors.text,
+    color: Colors.primary,
   },
   subtitle: {
     marginTop: 6,

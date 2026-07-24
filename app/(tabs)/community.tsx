@@ -4,14 +4,14 @@ import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { ScreenHeader } from '@/components/SectionHeader';
-import { CommunityPost, communityFilters, communityPosts } from '@/constants/data';
+import { communityFilters, communityPosts, type CommunityPost } from '@/constants/data';
 import { Colors, Radius, Spacing } from '@/constants/theme';
 
 const categoryStyles: Record<
   CommunityPost['category'],
   { bg: string; color: string; icon: keyof typeof Ionicons.glyphMap }
 > = {
-  Success: { bg: Colors.tealLight, color: '#2A8F7B', icon: 'sparkles' },
+  Success: { bg: Colors.tealLight, color: Colors.primary, icon: 'sparkles' },
   'Before/After': { bg: Colors.greenLight, color: Colors.primary, icon: 'swap-horizontal' },
   Volunteer: { bg: Colors.orangeLight, color: Colors.orange, icon: 'people' },
   'Local Hero': { bg: Colors.pinkLight, color: Colors.red, icon: 'trophy' },

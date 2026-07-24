@@ -8,15 +8,28 @@
     "icon": "./assets/images/icon.png",
     "scheme": "towntherapy",
     "userInterfaceStyle": "automatic",
+    "backgroundColor": "#2D4F4F",
+    "splash": {
+      "backgroundColor": "#2D4F4F",
+      "resizeMode": "contain"
+    },
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "backgroundColor": "#2D4F4F",
+      "splash": {
+        "backgroundColor": "#2D4F4F"
+      }
     },
     "android": {
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
+        "backgroundColor": "#2D4F4F",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
         "backgroundImage": "./assets/images/android-icon-background.png",
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
+      },
+      "backgroundColor": "#2D4F4F",
+      "splash": {
+        "backgroundColor": "#2D4F4F"
       },
       "predictiveBackGestureEnabled": false
     },
@@ -30,11 +43,33 @@
       [
         "expo-splash-screen",
         {
-          "image": "./assets/images/splash-icon.png",
-          "resizeMode": "contain",
-          "backgroundColor": "#0B6B44"
+          "backgroundColor": "#2D4F4F"
         }
-      ]
+      ],
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "Town Therapy uses your location to geotag civic reports so the town can respond."
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Town Therapy lets you attach photos as evidence for civic reports.",
+          "cameraPermission": "Town Therapy lets you take photos of issues you report."
+        }
+      ],
+      "expo-secure-store",
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/images/icon.png",
+          "color": "#2D4F4F",
+          "sounds": []
+        }
+      ],
+      "expo-mail-composer",
+      "@react-native-community/datetimepicker"
     ],
     "experiments": {
       "typedRoutes": true
