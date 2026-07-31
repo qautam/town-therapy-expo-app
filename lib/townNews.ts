@@ -16,10 +16,6 @@ export const DEMO_TOWN_NEWS: TownNewsSnapshot = {
     title: 'Riverside Cleanup Drive',
     starts_at: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString(),
   },
-  community_hero: {
-    name: 'Ravi Kumar',
-    detail: 'Led the alley cleanup crew this week',
-  },
 };
 
 function formatEventBannerDate(startsAt: string) {
@@ -51,23 +47,13 @@ export function buildTownNewsItems(snapshot: TownNewsSnapshot): TownNewsItem[] {
     });
   }
 
-  items.push({
-    id: 'issues-week',
-    icon: 'megaphone',
-    text: `${snapshot.issues_this_week} issue${snapshot.issues_this_week === 1 ? '' : 's'} reported this week — spot one?`,
-    route: '/report/new',
-  });
-
-  if (snapshot.community_hero) {
-    items.push({
-      id: 'hero',
-      icon: 'star',
-      text: `Community hero: ${snapshot.community_hero.name} — ${snapshot.community_hero.detail}`,
-      route: '/(tabs)/profile',
-    });
-  }
-
   items.push(
+    {
+      id: 'issues-week',
+      icon: 'megaphone',
+      text: `${snapshot.issues_this_week} issue${snapshot.issues_this_week === 1 ? '' : 's'} reported this week — spot one?`,
+      route: '/report/new',
+    },
     {
       id: 'drives',
       icon: 'checkmark-circle',

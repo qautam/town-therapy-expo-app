@@ -18,7 +18,7 @@ import { PublicSafetySection } from '@/components/PublicSafetySection';
 import { useKeyboardVerticalOffset } from '@/hooks/useKeyboardVerticalOffset';
 import { useTaskDraft } from '@/hooks/useTaskDraft';
 import { useVolunteer } from '@/context/VolunteerContext';
-import { REPORT_CATEGORIES } from '@/constants/reports';
+import { REPORT_CATEGORIES, REPORT_SEVERITIES, type ReportSeverity } from '@/constants/reports';
 import { api } from '@/lib/api';
 import { formatCoords, getCurrentLocation } from '@/lib/location';
 import { promptReportPhoto } from '@/lib/reportPhoto';
@@ -35,6 +35,7 @@ type ReportDraft = {
   title: string;
   description: string;
   categoryId: string;
+  severity: ReportSeverity;
   photoUri: string | null;
   locationLabel: string;
   geo: GeoState | null;
@@ -44,6 +45,7 @@ const EMPTY_REPORT_DRAFT: ReportDraft = {
   title: '',
   description: '',
   categoryId: REPORT_CATEGORIES[0].id,
+  severity: 'moderate',
   photoUri: null,
   locationLabel: '',
   geo: null,
@@ -62,7 +64,7 @@ export default function NewReportScreen() {
     { pause: loading }
   );
 
-  const { title, description, categoryId, photoUri, locationLabel, geo } = draft;
+  const { title, description, categoryId, severity, photoUri, locationLabel, geo } = draft;
 
   const category = useMemo(
     () => REPORT_CATEGORIES.find((item) => item.id === categoryId) ?? REPORT_CATEGORIES[0],
@@ -130,6 +132,7 @@ export default function NewReportScreen() {
         title: title.trim(),
         description: description.trim(),
         category: category.label,
+        severity,
         location_label: locationLabel.trim() || geo.label,
         latitude: geo.latitude,
         longitude: geo.longitude,
@@ -155,6 +158,7 @@ export default function NewReportScreen() {
     navigation,
     photoUri,
     refresh,
+    severity,
     title,
     volunteerLoading,
   ]);
@@ -166,7 +170,7 @@ export default function NewReportScreen() {
         keyboardVerticalOffset={keyboardOffset}>
         <Text style={styles.formHeading}>Report a civic issue</Text>
         <Text style={styles.formSubheading}>
-          Waste, traffic, potholes, streetlights, governance — geotagged for the town.
+          Spot a problem? Snap it, tag the place, and send it in.
         </Text>
 
         <Text style={styles.sectionLabel}>Issue type</Text>
@@ -188,6 +192,27 @@ export default function NewReportScreen() {
             );
           })}
         </ScrollView>
+
+        <Text style={styles.sectionLabel}>Severity</Text>
+        <View style={styles.severityRow}>
+          {REPORT_SEVERITIES.map((item) => {
+            const active = severity === item.id;
+            return (
+              <Pressable
+                key={item.id}
+                onPress={() => setDraft((current) => ({ ...current, severity: item.id }))}
+                style={[
+                  styles.severityButton,
+                  { borderColor: item.color, backgroundColor: item.softColor },
+                  active && { backgroundColor: item.color },
+                ]}>
+                <Text style={[styles.severityText, { color: item.color }, active && styles.severityTextActive]}>
+                  {item.label}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </View>
 
         <Text style={styles.sectionLabel}>Details</Text>
         <TextInput
@@ -310,6 +335,25 @@ const styles = StyleSheet.create({
     color: Colors.primary,
     textTransform: 'uppercase',
     letterSpacing: 0.6,
+  },
+  severityRow: {
+    flexDirection: 'row',
+    gap: Spacing.sm,
+  },
+  severityButton: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12,
+    borderRadius: Radius.pill,
+    borderWidth: 1.5,
+  },
+  severityText: {
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  severityTextActive: {
+    color: Colors.white,
   },
   input: {
     backgroundColor: Colors.white,

@@ -28,6 +28,7 @@ create table if not exists public.reports (
   title text not null,
   description text not null default '',
   category text not null default 'general',
+  severity text not null default 'moderate' check (severity in ('minor', 'moderate', 'critical')),
   status text not null default 'open' check (status in ('open', 'in_progress', 'resolved')),
   location_label text,
   latitude double precision,

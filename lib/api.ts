@@ -892,8 +892,6 @@ export const api = {
       volunteersResult,
       issuesWeekResult,
       nextEventResult,
-      heroPostResult,
-      heroVolunteerResult,
       eventsResult,
     ] = await Promise.all([
       supabase.from('reports').select('*', { count: 'exact', head: true }),
@@ -915,18 +913,6 @@ export const api = {
         .limit(1)
         .maybeSingle(),
       supabase
-        .from('community_posts')
-        .select('author_name, title, featured, category, created_at')
-        .gte('created_at', weekAgo)
-        .order('created_at', { ascending: false })
-        .limit(12),
-      supabase
-        .from('volunteer_profiles')
-        .select('full_name, community_hero_features')
-        .order('community_hero_features', { ascending: false })
-        .limit(1)
-        .maybeSingle(),
-      supabase
         .from('events')
         .select('id, title, description, category, starts_at, location_label, image_url, event_rsvps(guest_id)')
         .gte('starts_at', nowIso)
@@ -937,11 +923,6 @@ export const api = {
     const drivesCompleted = drivesResult.count ?? 0;
     const issuesResolved = resolvedResult.count ?? 0;
     const issuesReported = totalReportsResult.count ?? 0;
-
-    const heroPost = (heroPostResult.data ?? []).find(
-      (post) => post.featured || post.category === 'Local Hero'
-    );
-    const heroVolunteer = heroVolunteerResult.data;
 
     const news: TownNewsSnapshot = {
       active_volunteers: volunteersResult.count ?? 0,
@@ -955,17 +936,6 @@ export const api = {
             starts_at: nextEventResult.data.starts_at as string,
           }
         : null,
-      community_hero: heroPost
-        ? {
-            name: normalizeVolunteerName(heroPost.author_name as string),
-            detail: heroPost.title as string,
-          }
-        : heroVolunteer?.full_name
-          ? {
-              name: normalizeVolunteerName(heroVolunteer.full_name as string),
-              detail: 'Community hero of the week',
-            }
-          : null,
     };
 
     const events = (eventsResult.data ?? []).map((event) => {
@@ -1025,6 +995,7 @@ export const api = {
         title: input.title,
         description: input.description,
         category: input.category,
+        severity: input.severity ?? 'moderate',
         location_label: input.location_label,
         latitude: input.latitude,
         longitude: input.longitude,

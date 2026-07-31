@@ -66,8 +66,8 @@ export const SUSTAINABILITY_TIPS: SustainabilityTip[] = [
   },
   {
     id: '12',
-    icon: 'bus-outline',
-    text: 'Bus or carpool once a week. Fewer engines roaring, more stories from the back seat.',
+    icon: 'car-outline',
+    text: 'Switch the engine off at long waits. Idle driving burns fuel and foul air for nowhere.',
   },
   {
     id: '13',
@@ -141,8 +141,8 @@ export const SUSTAINABILITY_TIPS: SustainabilityTip[] = [
   },
   {
     id: '27',
-    icon: 'color-palette-outline',
-    text: 'Prefer refills and loose groceries. Packaging is the plot twist nobody asked for.',
+    icon: 'volume-mute-outline',
+    text: 'Ease off the horn. Honking won’t make the jam move — it just makes you the town’s loudest problem.',
   },
   {
     id: '28',
@@ -151,8 +151,8 @@ export const SUSTAINABILITY_TIPS: SustainabilityTip[] = [
   },
   {
     id: '29',
-    icon: 'trail-sign-outline',
-    text: 'Stay on park paths. Shortcuts through grass are how young plants get cancelled.',
+    icon: 'water-outline',
+    text: 'Fix that dripping tap. One slow leak can waste hundreds of litres a month at home.',
   },
   {
     id: '30',

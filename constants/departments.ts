@@ -13,13 +13,18 @@ export const DEPARTMENT_DEFINITIONS: DepartmentDefinition[] = [
   },
   {
     id: 'traffic',
-    name: 'Traffic',
-    categoryLabels: ['Traffic', 'Safety'],
+    name: 'Traffic & Parking',
+    categoryLabels: ['Traffic & Parking', 'Traffic', 'Safety', 'Parking'],
   },
   {
     id: 'potholes',
-    name: 'Potholes & Roads',
-    categoryLabels: ['Potholes', 'Infrastructure'],
+    name: 'Road issues',
+    categoryLabels: ['Road issues', 'Potholes', 'Infrastructure'],
+  },
+  {
+    id: 'drainage',
+    name: 'Waterlogging & Drainage',
+    categoryLabels: ['Waterlogging & Drainage', 'Drainage', 'Waterlogging', 'Flooding'],
   },
   {
     id: 'streetlights',
@@ -28,12 +33,17 @@ export const DEPARTMENT_DEFINITIONS: DepartmentDefinition[] = [
   },
   {
     id: 'governance',
-    name: 'Governance & Other',
-    categoryLabels: ['Governance', 'Other', 'general'],
+    name: 'Governance',
+    categoryLabels: ['Governance'],
+  },
+  {
+    id: 'other',
+    name: 'Other',
+    categoryLabels: ['Other', 'general'],
   },
 ];
 
-export const FALLBACK_DEPARTMENT_ID = 'governance';
+export const FALLBACK_DEPARTMENT_ID = 'other';
 
 export function resolveDepartmentDefinition(category: string): DepartmentDefinition {
   const normalized = category.trim().toLowerCase();

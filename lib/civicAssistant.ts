@@ -68,7 +68,7 @@ TAKE A BREAK / RESUME:
 
 REPORT AN ISSUE:
 1. Reports → Report an issue (or Home → Report).
-2. Pick issue type: Waste Management, Traffic, Potholes, Streetlights, Governance.
+2. Pick issue type: Waste Management, Traffic & Parking, Road issues, Waterlogging & Drainage, Streetlights, Governance, or Other.
 3. Add title + description.
 4. Geotagged location is required (Refresh; optional landmark).
 5. Optional photo (camera/gallery).
@@ -274,9 +274,9 @@ const FAQ_ANSWERS: { match: RegExp; answer: string }[] = [
       'Open the event (or Events → My RSVPs) and tap Going ✓ again to cancel. Easy in, easy out — just come when you can.',
   },
   {
-    match: /pothole|streetlight|waste management|traffic|governance/,
+    match: /pothole|road issue|waterlog|drain|streetlight|waste management|traffic|parking|governance|\bother\b/,
     answer:
-      'Reports → Report an issue, pick the matching type (Potholes, Streetlights, Waste Management, Traffic, or Governance), add a clear photo and location, then Submit. One issue per report works best.',
+      'Reports → Report an issue, pick the matching type (Waste Management, Traffic & Parking, Road issues, Waterlogging & Drainage, Streetlights, Governance, or Other), add a clear photo and location, then Submit. One issue per report works best.',
   },
   {
     match: /monsoon|drain|flood|flooding/,

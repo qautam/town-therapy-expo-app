@@ -375,15 +375,6 @@ export const localApi = {
       .filter((event) => new Date(event.starts_at).getTime() >= now)
       .sort((a, b) => a.starts_at.localeCompare(b.starts_at))[0];
 
-    const heroPost =
-      db.posts.find((post) => post.featured) ??
-      db.posts.find((post) => post.category === 'Local Hero') ??
-      null;
-
-    const topVolunteer = [...db.newsletterSubscribers].sort(
-      (a, b) => (b.community_hero_features ?? 0) - (a.community_hero_features ?? 0)
-    )[0];
-
     return {
       active_volunteers: activeVolunteers,
       issues_this_week: issuesThisWeek,
@@ -392,17 +383,6 @@ export const localApi = {
       next_event: nextEventRow
         ? { id: nextEventRow.id, title: nextEventRow.title, starts_at: nextEventRow.starts_at }
         : null,
-      community_hero: heroPost
-        ? {
-            name: normalizeVolunteerName(heroPost.author_name),
-            detail: heroPost.title,
-          }
-        : topVolunteer?.full_name
-          ? {
-              name: normalizeVolunteerName(topVolunteer.full_name),
-              detail: 'Leading the charge for Hazaribagh',
-            }
-          : null,
     };
   },
 
@@ -422,6 +402,7 @@ export const localApi = {
       title: input.title,
       description: input.description,
       category: input.category,
+      severity: input.severity ?? 'moderate',
       status: 'open',
       location_label: input.location_label ?? null,
       latitude: input.latitude ?? null,

@@ -252,7 +252,7 @@ export default function HomeScreen() {
             <ActionTile
               icon="calendar-outline"
               title="Events"
-              subtitle="What's on"
+              subtitle="What's next"
               onPress={() => router.push('/(tabs)/events')}
             />
             <ActionTile
@@ -297,7 +297,7 @@ export default function HomeScreen() {
 
           {/* 3. Highlights — events */}
           <HomeSection
-            title="Upcoming"
+            title="What's next"
             actionLabel="See all"
             onAction={() => router.push('/(tabs)/events')}>
             {upcomingEvents.length === 0 ? (

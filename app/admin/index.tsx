@@ -19,6 +19,7 @@ import { EventDateTimePicker } from '@/components/EventDateTimePicker';
 import { KeyboardAwareScrollView } from '@/components/KeyboardAwareScrollView';
 import { useAdminAuth } from '@/context/AdminAuthContext';
 import { DEPARTMENT_DEFINITIONS, isValidEmail, resolveDepartmentDefinition } from '@/constants/departments';
+import { reportSeverityMeta } from '@/constants/reports';
 import { VOLUNTEER_SKILLS } from '@/constants/volunteerProfile';
 import { api, formatEventDateParts } from '@/lib/api';
 import { isSupabaseConfigured } from '@/lib/config';
@@ -1128,12 +1129,18 @@ export default function AdminPanelScreen() {
             reports.map((report) => {
               const definition = resolveDepartmentDefinition(report.category);
               const route = resolveRouteForCategory(report.category, contactDrafts);
+              const severity = reportSeverityMeta(report.severity);
               return (
               <View key={report.id} style={styles.card}>
                 <Text style={styles.cardTitle}>{report.title}</Text>
                 <Text style={styles.cardMeta}>
                   {report.author_name ?? report.reporter_name ?? 'Citizen'} · {report.category}
                 </Text>
+                <View style={[styles.severityBadge, { backgroundColor: severity.softColor }]}>
+                  <Text style={[styles.severityBadgeText, { color: severity.color }]}>
+                    {severity.label} severity
+                  </Text>
+                </View>
                 {report.description ? <Text style={styles.cardBody}>{report.description}</Text> : null}
                 {report.location_label ? (
                   <Text style={styles.cardLocation}>{report.location_label}</Text>
@@ -1857,6 +1864,19 @@ const styles = StyleSheet.create({
     marginTop: 4,
     fontSize: 12,
     color: Colors.textMuted,
+  },
+  severityBadge: {
+    alignSelf: 'flex-start',
+    marginTop: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: Radius.pill,
+  },
+  severityBadgeText: {
+    fontSize: 11,
+    fontWeight: '800',
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
   },
   cardBody: {
     marginTop: Spacing.sm,

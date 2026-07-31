@@ -18,6 +18,7 @@ import { api } from '@/lib/api';
 import { cacheGetOrFetch, cacheGetStale, cacheInvalidate, cacheOnInvalidate } from '@/lib/queryCache';
 import { Colors, Radius, Spacing } from '@/constants/theme';
 import type { Report } from '@/types/database';
+import { reportSeverityMeta } from '@/constants/reports';
 
 const REPORTS_TTL_MS = 60_000;
 
@@ -28,6 +29,7 @@ function ReportCard({ report }: { report: Report }) {
       : report.status === 'in_progress'
         ? Colors.orange
         : Colors.textSecondary;
+  const severity = reportSeverityMeta(report.severity);
 
   return (
     <View style={styles.card}>
@@ -37,7 +39,12 @@ function ReportCard({ report }: { report: Report }) {
           {report.status.replace('_', ' ')}
         </Text>
       </View>
-      <Text style={styles.cardMeta}>{report.category}</Text>
+      <View style={styles.metaRow}>
+        <Text style={styles.cardMeta}>{report.category}</Text>
+        <View style={[styles.severityBadge, { backgroundColor: severity.softColor }]}>
+          <Text style={[styles.severityBadgeText, { color: severity.color }]}>{severity.label}</Text>
+        </View>
+      </View>
       {report.description ? (
         <Text style={styles.cardBody} numberOfLines={3}>
           {report.description}
@@ -265,6 +272,24 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '600',
     color: Colors.primary,
+  },
+  metaRow: {
+    marginTop: 6,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: Spacing.sm,
+  },
+  severityBadge: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: Radius.pill,
+  },
+  severityBadgeText: {
+    fontSize: 11,
+    fontWeight: '800',
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
   },
   cardBody: {
     marginTop: Spacing.sm,

@@ -18,6 +18,7 @@ export type Report = {
   title: string;
   description: string;
   category: string;
+  severity?: 'minor' | 'moderate' | 'critical';
   status: 'open' | 'in_progress' | 'resolved';
   location_label: string | null;
   latitude: number | null;
@@ -109,7 +110,6 @@ export type TownNewsSnapshot = {
   drives_completed: number;
   issues_resolved: number;
   next_event: { id: string; title: string; starts_at: string } | null;
-  community_hero: { name: string; detail: string } | null;
 };
 
 /** Single cloud payload so home banner + glance metrics stay in sync. */
@@ -130,6 +130,7 @@ export type CreateReportInput = {
   title: string;
   description: string;
   category: string;
+  severity?: 'minor' | 'moderate' | 'critical';
   location_label?: string;
   latitude?: number;
   longitude?: number;
