@@ -5,8 +5,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   BackHandler,
+  Dimensions,
   Keyboard,
-  KeyboardAvoidingView,
   Platform,
   Pressable,
   ScrollView,
@@ -14,8 +14,9 @@ import {
   Text,
   TextInput,
   View,
+  type KeyboardEvent,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import {
   streamCivicAssistant,
@@ -60,11 +61,26 @@ function DrRantAvatar({ size = 28 }: { size?: number }) {
   );
 }
 
+/** How far to lift the chat so the composer clears the keyboard. */
+function liftForKeyboard(event: KeyboardEvent) {
+  const height = Math.ceil(event.endCoordinates.height);
+  if (Platform.OS !== 'android') return height;
+
+  // When Android already resized the window, padding again would double-lift.
+  const screenH = Dimensions.get('screen').height;
+  const windowH = Dimensions.get('window').height;
+  const resizedBy = screenH - windowH;
+  if (resizedBy > height * 0.45) return 0;
+  return height;
+}
+
 export default function CivicAssistantScreen() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const scrollRef = useRef<ScrollView>(null);
   const inputRef = useRef<TextInput>(null);
   const [loading, setLoading] = useState(false);
+  const [keyboardLift, setKeyboardLift] = useState(0);
   const { value: draft, setValue: setDraft, clearDraft } = useTaskDraft(
     'assistant-chat',
     EMPTY_ASSISTANT_DRAFT,
@@ -85,9 +101,23 @@ export default function CivicAssistantScreen() {
   const inConversation = messages.length > 0 || loading;
 
   useEffect(() => {
-    const timer = setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 60);
+    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+
+    const show = Keyboard.addListener(showEvent, (event) => {
+      setKeyboardLift(liftForKeyboard(event));
+    });
+    const hide = Keyboard.addListener(hideEvent, () => setKeyboardLift(0));
+    return () => {
+      show.remove();
+      hide.remove();
+    };
+  }, []);
+
+  useEffect(() => {
+    const timer = setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 80);
     return () => clearTimeout(timer);
-  }, [messages, loading]);
+  }, [messages, loading, keyboardLift]);
 
   const returnToQuestions = useCallback(() => {
     requestIdRef.current += 1;
@@ -141,7 +171,6 @@ export default function CivicAssistantScreen() {
     ]);
     setInput('');
     setLoading(true);
-    Keyboard.dismiss();
 
     try {
       const history: CivicChatMessage[] = nextMessages.map(({ role, content: text }) => ({
@@ -199,12 +228,13 @@ export default function CivicAssistantScreen() {
     }
   };
 
+  const composerBottomPad =
+    keyboardLift > 0 ? Spacing.sm : Math.max(insets.bottom, Spacing.sm);
+
   return (
-    <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
-      <KeyboardAvoidingView
-        style={styles.flex}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        keyboardVerticalOffset={Platform.OS === 'ios' ? 8 : 0}>
+    <SafeAreaView style={styles.container} edges={['top']}>
+      {/* Explicit lift — Android KeyboardAvoidingView often leaves the composer under Gboard */}
+      <View style={[styles.flex, { paddingBottom: keyboardLift }]}>
         <View style={styles.header}>
           <Pressable style={styles.backButton} onPress={handleBack} hitSlop={10}>
             <Ionicons name="arrow-back" size={22} color={Colors.primary} />
@@ -223,9 +253,8 @@ export default function CivicAssistantScreen() {
           ref={scrollRef}
           style={styles.flex}
           contentContainerStyle={styles.chat}
-          keyboardShouldPersistTaps="always"
+          keyboardShouldPersistTaps="handled"
           keyboardDismissMode="on-drag"
-          automaticallyAdjustKeyboardInsets={Platform.OS === 'ios'}
           showsVerticalScrollIndicator={false}>
           {messages.map((message) => {
             const mine = message.role === 'user';
@@ -273,7 +302,7 @@ export default function CivicAssistantScreen() {
           ) : null}
         </ScrollView>
 
-        <View style={styles.composer}>
+        <View style={[styles.composer, { paddingBottom: composerBottomPad }]}>
           <TextInput
             ref={inputRef}
             style={styles.input}
@@ -296,7 +325,7 @@ export default function CivicAssistantScreen() {
             <Ionicons name="send" size={18} color={Colors.white} />
           </Pressable>
         </View>
-      </KeyboardAvoidingView>
+      </View>
     </SafeAreaView>
   );
 }
@@ -383,22 +412,6 @@ const styles = StyleSheet.create({
   bubbleTextMine: {
     color: Colors.white,
   },
-  typingRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.sm,
-  },
-  typingBubble: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.sm,
-    backgroundColor: Colors.white,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    borderRadius: Radius.lg,
-    paddingHorizontal: Spacing.md,
-    paddingVertical: 10,
-  },
   starters: {
     marginTop: Spacing.sm,
     gap: Spacing.sm,
@@ -448,7 +461,6 @@ const styles = StyleSheet.create({
     gap: Spacing.sm,
     paddingHorizontal: Spacing.md,
     paddingTop: Spacing.sm,
-    paddingBottom: Spacing.sm,
     borderTopWidth: 1,
     borderTopColor: 'rgba(255,255,255,0.14)',
     backgroundColor: Colors.primaryDark,

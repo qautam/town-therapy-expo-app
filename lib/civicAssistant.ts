@@ -27,14 +27,15 @@ export const CIVIC_ASSISTANT_SYSTEM_PROMPT = `You are Dr. Rant — the optimisti
 PERSONA:
 - You’re the friend who’s already been to the cleanup, filed the report, and planted the sapling.
 - Talk like a real chat — natural, warm, back-and-forth. React to what they just said; ask a short follow-up when it helps keep the conversation going.
-- If the chat is already several turns deep, start winding down: keep answers shorter and steer them toward showing up (Events → RSVP) instead of opening a new rabbit hole.
+- If the chat is already several turns deep, start winding down: keep answers shorter instead of opening a new rabbit hole.
 - Warm, capable, encouraging. A little dry wit is fine. Never sound like an encyclopedia, FAQ bot, or branded mascot.
 - Prefer a conversational paragraph or two over canned blurbs or long bullet lists. One clear next step beats a lecture.
 - Never open with filler (“Great question,” “As an AI…,” self-introductions).
 - Stay civil and lawful. Never encourage vandalism, harassment, or illegal activity.
 - When guiding inside the app, use exact UI labels so people can find things fast.
 - Remember earlier messages in the thread and continue the conversation — don’t restart from zero each time.
-- You receive a LIVE list of upcoming Town Therapy events with each reply. When people ask what’s on, which drive to join, or when the next cleanup is, name real events (title, date/time, place) from that list and point them to Events → Upcoming → RSVP. Never invent events that aren’t on the list.
+- You receive a LIVE list of upcoming Town Therapy events with each reply. Use it ONLY when they ask what’s on, which drive to join, or when the next cleanup is — then name real events (title, date/time, place) and point them to Events → Upcoming → RSVP. Never invent events that aren’t on the list.
+- Do NOT tack an “RSVP to the next event” reminder onto ordinary answers. That send-off happens once when the chat wraps up.
 
 ═══════════════════════════════════════
 TOWN THERAPY — APP KNOWLEDGE (know this cold)
@@ -304,6 +305,76 @@ function faqAnswer(question: string) {
   return FAQ_ANSWERS.find((item) => item.match.test(q))?.answer ?? null;
 }
 
+/** Short “you decide / tell me / I don’t know” follow-ups that need prior context. */
+function isDeferralFollowUp(question: string) {
+  const q = question.toLowerCase().trim().replace(/\s+/g, ' ');
+  if (q.length > 80) return false;
+  return (
+    /^(yes|yeah|yep|ok|okay|sure|please|do it|go ahead)[.!]?$/i.test(q) ||
+    /^(yes[,.]?\s*)?(tell|suggest|give|pick|choose|recommend)\s+(me|one|something|anything)/i.test(
+      q
+    ) ||
+    /\bi don'?t know\b/i.test(q) ||
+    /\byou tell me\b/i.test(q) ||
+    /\bidk\b/i.test(q) ||
+    /\bwhat (should|can) i (do|pick|try)\b/i.test(q) ||
+    /\bsuggest (one|something|anything)\b/i.test(q) ||
+    /\bany ideas?\b/i.test(q)
+  );
+}
+
+function lastSubstantialUserMessage(messages: CivicChatMessage[]) {
+  const users = messages.filter((message) => message.role === 'user');
+  for (let i = users.length - 1; i >= 0; i -= 1) {
+    const text = users[i].content.trim();
+    if (!isDeferralFollowUp(text) && text.length >= 12) return text;
+  }
+  return users[users.length - 1]?.content.trim() ?? '';
+}
+
+/** Concrete next step when they ask us to pick for them. */
+function concreteSuggestion(topic: string, events: Event[]) {
+  const q = topic.toLowerCase();
+  const next = events[0];
+  const eventNudge = next
+    ? (() => {
+        const { date, month, time } = formatEventDateParts(next.starts_at);
+        return `Or RSVP to "${next.title}" (${month} ${date}, ${time} at ${next.location_label}) under Events → Upcoming.`;
+      })()
+    : 'Or open Events → Upcoming and RSVP to whatever’s next.';
+
+  if (/neighborhood|neighbourhood|community|street|locality|mohalla/.test(q)) {
+    return `Alright — here’s one clear move this week: walk your own street once, pick the worst spot (trash pile, pothole, dead light), and file it in Reports → Report an issue with a clear photo + location. One solid report beats a vague “someone should fix this.” ${eventNudge} Which one will you try first?`;
+  }
+  if (/waste|segregat|garbage|litter|bin/.test(q)) {
+    return `Let’s keep it tiny: set up two bins at home today — wet and dry — and stick to that for a week. No perfection, just the habit. If you spot dumping on the street, photo + Reports. ${eventNudge}`;
+  }
+  if (/littering|someone keeps|dump/.test(q)) {
+    return `Start gentle: one calm chat with the person (or leave a clear chalkboard note on Home → Town board). If it continues, document with a photo and report it — no group-chat pile-on needed. Want the report path or the chalkboard path?`;
+  }
+  if (/tree|plant|sapling/.test(q)) {
+    return `Pick a native shade tree if you can, plant it where it’ll get water for the first two summers, and protect the base. If you’d rather join a group plant, ${eventNudge}`;
+  }
+  if (/sustain|habit|eco|green|climate|bottle/.test(q)) {
+    return `Easiest win: carry one reusable bottle starting tomorrow and skip the disposable for a week. Count how many plastics you dodge — it’s oddly motivating. Want a second habit after that?`;
+  }
+  if (/report|issue|pothole|civic/.test(q)) {
+    return `Do this once today: Reports → Report an issue → pick the type → clear photo → pin the location → Submit. One complete report is worth more than ten forwards. Got a spot in mind?`;
+  }
+  if (/event|volunteer|drive|cleanup|rsvp|begin|start|help my town|contribute|active/.test(q)) {
+    if (!next) {
+      return `Then start here: open Events → Upcoming, RSVP to one drive that fits your week, show up, and tap Complete after. One morning beats a month of intending to help.`;
+    }
+    const { date, month, time } = formatEventDateParts(next.starts_at);
+    return `Then start here: open Events → Upcoming, RSVP to "${next.title}" (${month} ${date}, ${time}), show up, then tap Complete after. That one drive teaches more than scrolling. Sound doable?`;
+  }
+  if (/fit in|don'?t know anyone/.test(q)) {
+    return `Come to the next drive anyway — most people arrive solo. Say hi to whoever’s holding the clipboard, do one shared task, and you’ll leave with faces you recognize. ${eventNudge}`;
+  }
+
+  return `Here’s a default starter pack: (1) report one real issue with a photo this week, or (2) RSVP to one upcoming drive. ${eventNudge} Pick either — both move the town.`;
+}
+
 function formatUpcomingEventLine(event: Event, index: number) {
   const { date, month, time } = formatEventDateParts(event.starts_at);
   const blurb = event.description?.trim()
@@ -328,16 +399,17 @@ async function loadUpcomingEvents(): Promise<Event[]> {
 function buildUpcomingEventsBrief(events: Event[]) {
   if (events.length === 0) {
     return [
-      'UPCOMING EVENTS (live from Town Therapy):',
+      'UPCOMING EVENTS (live from Town Therapy — reference only):',
       'None scheduled right now.',
-      'Tell people to check Events → Upcoming soon, and suggest reporting an issue or leaving a chalkboard note meanwhile.',
+      'Only mention the calendar if they ask what’s on. Do not append RSVP reminders to unrelated answers.',
     ].join('\n');
   }
 
   return [
-    'UPCOMING EVENTS (live from Town Therapy — only recommend these; do not invent others):',
+    'UPCOMING EVENTS (live from Town Therapy — reference only; only recommend these; do not invent others):',
     ...events.map((event, index) => formatUpcomingEventLine(event, index)),
     'How to join: Events tab → Upcoming → open the drive → RSVP.',
+    'Mention a specific event ONLY when they ask about events/schedule. Do not tack an RSVP reminder onto every reply — that send-off is handled at wrap-up.',
   ].join('\n');
 }
 
@@ -350,12 +422,22 @@ function wrapUpMessage(events: Event[]) {
 
 function buildModelMessages(messages: CivicChatMessage[], upcomingBrief: string) {
   const latest = [...messages].reverse().find((message) => message.role === 'user');
-  const talkingPoints = latest ? faqAnswer(latest.content) : null;
+  const topicForTips = latest
+    ? isDeferralFollowUp(latest.content)
+      ? lastSubstantialUserMessage(messages)
+      : latest.content
+    : '';
+  const talkingPoints = topicForTips ? faqAnswer(topicForTips) : null;
 
   const systemParts = [CIVIC_ASSISTANT_SYSTEM_PROMPT, upcomingBrief];
   if (talkingPoints) {
     systemParts.push(
-      `TALKING POINTS for this turn (paraphrase naturally in your own voice — do NOT paste verbatim as a brochure; expand into a real chat reply, weave in a real upcoming event when it fits, and invite a follow-up):\n${talkingPoints}`
+      `TALKING POINTS for this turn (paraphrase naturally in your own voice — do NOT paste verbatim as a brochure; expand into a real chat reply and invite a follow-up when it helps. Do NOT append an upcoming-event / RSVP reminder unless they asked about events or the schedule):\n${talkingPoints}`
+    );
+  }
+  if (latest && isDeferralFollowUp(latest.content)) {
+    systemParts.push(
+      `The user just deferred to you ("${latest.content.trim()}"). Give ONE concrete next step tied to the earlier topic — do not restart with a generic “ask me anything” intro.`
     );
   }
 
@@ -368,7 +450,9 @@ function buildModelMessages(messages: CivicChatMessage[], upcomingBrief: string)
   ];
 }
 
-function composeLocalAnswer(question: string, events: Event[]) {
+function composeLocalAnswer(messages: CivicChatMessage[], events: Event[]) {
+  const latest = [...messages].reverse().find((message) => message.role === 'user');
+  const question = latest?.content.trim() ?? '';
   const q = question.toLowerCase().trim();
   const next = events[0];
   const nextLine = next
@@ -378,15 +462,17 @@ function composeLocalAnswer(question: string, events: Event[]) {
       })()
     : 'Open Events → Upcoming to see what’s scheduled — new drives show up there first.';
 
+  // Follow-ups like “you tell me” / “yes” need the earlier topic, not a fresh intro.
+  if (isDeferralFollowUp(question)) {
+    const topic = lastSubstantialUserMessage(messages);
+    return concreteSuggestion(topic || question, events);
+  }
+
   if (/(hi|hello|hey|namaste)\b/.test(q) && q.length < 40) {
-    return next
-      ? `Hey — glad you're here. ${nextLine} Or ask me about reporting, waste, trees — whatever's on your mind.`
-      : "Hey — glad you're here. Ask me about the app, events, reporting, or anything civic in Hazaribagh. What's on your mind?";
+    return "Hey — glad you're here. Ask me about the app, events, reporting, or anything civic in Hazaribagh. What's on your mind?";
   }
   if (/(thank|thanks|shukriya)/.test(q) && q.length < 50) {
-    return next
-      ? `Anytime. You've got this — and ${nextLine}`
-      : "Anytime. You've got this — want to pick a next step together?";
+    return "Anytime. You've got this — want to pick a next step together?";
   }
   if (/(who are you|what can you)/.test(q)) {
     return "I'm Dr. Rant — your civic coach inside Town Therapy. I know the app and what's coming up on Events. What are we tackling?";
@@ -412,7 +498,7 @@ function composeLocalAnswer(question: string, events: Event[]) {
 
   const faq = faqAnswer(question);
   if (faq) {
-    return next ? `${faq} ${nextLine}` : `${faq} What feels doable for you this week?`;
+    return `${faq} What feels doable for you this week?`;
   }
 
   if (/(event|rsvp|drive|volunteer|cleanup)/.test(q)) {
@@ -430,9 +516,13 @@ function composeLocalAnswer(question: string, events: Event[]) {
     return "Try Home for quick actions, Events for drives, Reports for issues, and You for your profile and levels. Tell me what you're trying to do and I'll point to the exact tap.";
   }
 
-  return next
-    ? `I'm with you — ask about Town Therapy, reporting, civic duties, or sustainable living. Or jump straight in: ${nextLine}`
-    : "I'm with you — ask me anything about Town Therapy, events, reporting, civic duties, or sustainable living, and we'll figure out one clear next step.";
+  // Soft fallback: if earlier turns had a topic, give a concrete nudge instead of the intro loop.
+  const prior = lastSubstantialUserMessage(messages);
+  if (prior && prior.toLowerCase() !== q) {
+    return concreteSuggestion(prior, events);
+  }
+
+  return "I'm with you — ask me anything about Town Therapy, events, reporting, civic duties, or sustainable living, and we'll figure out one clear next step.";
 }
 
 async function sleep(ms: number) {
@@ -604,7 +694,7 @@ export async function streamCivicAssistant(
     // Fall through to local live typing.
   }
 
-  const local = composeLocalAnswer(latest.content, upcoming);
+  const local = composeLocalAnswer(messages, upcoming);
   await streamLocalText(local, handlers.onToken, handlers.signal);
   return { text: local, source: 'local' as const };
 }

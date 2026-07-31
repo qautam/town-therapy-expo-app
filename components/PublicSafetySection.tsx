@@ -320,21 +320,27 @@ export function PublicSafetySection({
         {EMERGENCY_CONTACTS.map((contact) => (
           <Pressable
             key={contact.id}
-            style={[styles.emergencyChip, contact.primary && styles.emergencyChipPrimary]}
-            onPress={() => callEmergency(contact.number, contact.label)}>
-            <Ionicons
-              name={contact.icon}
-              size={16}
-              color={contact.primary ? Colors.white : Colors.red}
-            />
-            <Text style={[styles.emergencyChipNumber, contact.primary && styles.emergencyChipNumberPrimary]}>
-              {contact.number}
-            </Text>
-            <Text
-              style={[styles.emergencyChipLabel, contact.primary && styles.emergencyChipLabelPrimary]}
-              numberOfLines={1}>
-              {contact.label.split(' ')[0]}
-            </Text>
+            onPress={() => callEmergency(contact.number, contact.label)}
+            style={({ pressed }) => [
+              styles.emergencyChip,
+              contact.primary && styles.emergencyChipPrimary,
+              pressed &&
+                (contact.primary ? styles.emergencyChipPrimaryPressed : styles.emergencyChipPressed),
+            ]}>
+            {({ pressed }) => {
+              const ink = pressed || contact.primary ? Colors.white : Colors.red;
+              const mute =
+                pressed || contact.primary ? 'rgba(255,255,255,0.95)' : Colors.textSecondary;
+              return (
+                <>
+                  <Ionicons name={contact.icon} size={16} color={ink} />
+                  <Text style={[styles.emergencyChipNumber, { color: ink }]}>{contact.number}</Text>
+                  <Text style={[styles.emergencyChipLabel, { color: mute }]} numberOfLines={1}>
+                    {contact.label.split(' ')[0]}
+                  </Text>
+                </>
+              );
+            }}
           </Pressable>
         ))}
       </ScrollView>
@@ -670,21 +676,30 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.red,
     borderColor: '#8E2419',
   },
+  emergencyChipPressed: {
+    backgroundColor: Colors.red,
+    borderColor: '#8E2419',
+    transform: [{ scale: 0.96 }],
+    shadowColor: Colors.red,
+    shadowOpacity: 0.35,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 4,
+  },
+  emergencyChipPrimaryPressed: {
+    backgroundColor: '#8E2419',
+    borderColor: '#6F1B13',
+    transform: [{ scale: 0.96 }],
+  },
   emergencyChipNumber: {
     fontSize: 16,
     fontWeight: '800',
     color: Colors.red,
-  },
-  emergencyChipNumberPrimary: {
-    color: Colors.white,
   },
   emergencyChipLabel: {
     fontSize: 10,
     fontWeight: '600',
     color: Colors.textSecondary,
     textAlign: 'center',
-  },
-  emergencyChipLabelPrimary: {
-    color: 'rgba(255,255,255,0.9)',
   },
 });

@@ -6,12 +6,10 @@ import {
 } from '@expo-google-fonts/caveat';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import * as Haptics from 'expo-haptics';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   AppState,
-  Platform,
   Pressable,
   StyleSheet,
   Text,
@@ -21,24 +19,14 @@ import {
   type NativeSyntheticEvent,
   type TextLayoutEventData,
 } from 'react-native';
-import Animated, {
-  Easing,
-  cancelAnimation,
-  interpolate,
-  useAnimatedStyle,
-  useSharedValue,
-  withDelay,
-  withRepeat,
-  withSequence,
-  withTiming,
-} from 'react-native-reanimated';
 
+import { ChalkWritingHand, type CaretPoint } from '@/components/ChalkWritingHand';
 import { Colors, Radius, Spacing } from '@/constants/theme';
 import { useVolunteer } from '@/context/VolunteerContext';
 import { useCollapsedSection } from '@/hooks/useCollapsedSection';
 import { useTaskDraft } from '@/hooks/useTaskDraft';
 import { api } from '@/lib/api';
-import { playChalkScreech, unloadChalkSound } from '@/lib/chalkSound';
+import { playChalkScreech, preloadChalkSound } from '@/lib/chalkSound';
 import {
   STICKY_NOTE_COLORS,
   formatStickyNoteRemaining,
@@ -160,20 +148,8 @@ function ChalkDust() {
   );
 }
 
-type DustMote = {
-  id: number;
-  x: number;
-  y: number;
-  driftX: number;
-  driftY: number;
-  size: number;
-};
-
-type CaretPoint = { x: number; y: number };
-
 const CHALK_FONT_SIZE = 24;
 const CHALK_LINE_HEIGHT = 28;
-const STICK_WIDTH = 38;
 
 function caretFromTextLayout(
   event: NativeSyntheticEvent<TextLayoutEventData>,
@@ -188,203 +164,6 @@ function caretFromTextLayout(
     x: Math.min(Math.max(6, last.x + last.width), maxX),
     y: last.y + CHALK_FONT_SIZE * 0.72,
   };
-}
-
-function DustParticle({
-  mote,
-  color,
-  onDone,
-}: {
-  mote: DustMote;
-  color: string;
-  onDone: (id: number) => void;
-}) {
-  const progress = useSharedValue(0);
-
-  useEffect(() => {
-    progress.value = withTiming(1, {
-      duration: 480 + mote.size * 50,
-      easing: Easing.out(Easing.quad),
-    });
-    const timer = setTimeout(() => onDone(mote.id), 560);
-    return () => clearTimeout(timer);
-  }, [mote.id, mote.size, onDone, progress]);
-
-  const style = useAnimatedStyle(() => {
-    const t = progress.value;
-    return {
-      opacity: interpolate(t, [0, 0.12, 1], [0, 0.75, 0]),
-      transform: [
-        { translateX: mote.x + mote.driftX * t },
-        { translateY: mote.y + mote.driftY * t + t * t * 12 },
-        { scale: interpolate(t, [0, 1], [1, 0.35]) },
-      ],
-    };
-  });
-
-  return (
-    <Animated.View
-      style={[
-        styles.flyingDust,
-        style,
-        {
-          width: mote.size,
-          height: mote.size,
-          borderRadius: mote.size / 2,
-          backgroundColor: color,
-        },
-      ]}
-    />
-  );
-}
-
-/** Chalk stick scrapes on the same board surface, following measured caret. */
-function ChalkOnWritingBoard({
-  active,
-  chalkColor,
-  caret,
-  strokePulse,
-}: {
-  active: boolean;
-  chalkColor: string;
-  caret: CaretPoint;
-  /** Increments on each newly typed character. */
-  strokePulse: number;
-}) {
-  const tipX = useSharedValue(caret.x);
-  const tipY = useSharedValue(caret.y);
-  const fromX = useSharedValue(caret.x);
-  const fromY = useSharedValue(caret.y);
-  const angle = useSharedValue(-26);
-  const press = useSharedValue(0);
-  const smear = useSharedValue(0);
-  const visible = useSharedValue(0);
-  const tremor = useSharedValue(0);
-  const prevCaret = useRef(caret);
-  const lastPulse = useRef(0);
-  const [dust, setDust] = useState<DustMote[]>([]);
-
-  useEffect(() => {
-    if (!active) {
-      cancelAnimation(tremor);
-      visible.value = withTiming(0, { duration: 160 });
-      press.value = 0;
-      smear.value = 0;
-      lastPulse.current = 0;
-      setDust([]);
-      void unloadChalkSound();
-      return;
-    }
-
-    visible.value = withTiming(1, { duration: 200 });
-    tremor.value = withRepeat(
-      withSequence(
-        withTiming(1, { duration: 120, easing: Easing.inOut(Easing.sin) }),
-        withTiming(0, { duration: 130, easing: Easing.inOut(Easing.sin) })
-      ),
-      -1,
-      true
-    );
-  }, [active, press, smear, tremor, visible]);
-
-  // Follow the real letter caret from text layout measurement.
-  useEffect(() => {
-    if (!active) return;
-
-    fromX.value = prevCaret.current.x;
-    fromY.value = prevCaret.current.y;
-    prevCaret.current = caret;
-
-    tipX.value = withTiming(caret.x, { duration: 55, easing: Easing.out(Easing.cubic) });
-    tipY.value = withTiming(caret.y, { duration: 55, easing: Easing.out(Easing.cubic) });
-    angle.value = withTiming(-18 - ((caret.x + caret.y) % 11), { duration: 70 });
-  }, [active, angle, caret, fromX, fromY, tipX, tipY]);
-
-  // Scrape + sound only when a new character was typed.
-  useEffect(() => {
-    if (!active || strokePulse <= 0 || strokePulse === lastPulse.current) return;
-    lastPulse.current = strokePulse;
-
-    press.value = withSequence(
-      withTiming(1, { duration: 28, easing: Easing.out(Easing.quad) }),
-      withTiming(0, { duration: 140, easing: Easing.in(Easing.quad) })
-    );
-    smear.value = withSequence(
-      withTiming(1, { duration: 30 }),
-      withDelay(60, withTiming(0, { duration: 320, easing: Easing.out(Easing.quad) }))
-    );
-
-    const burst: DustMote[] = Array.from({ length: 4 }).map((_, index) => ({
-      id: Date.now() + index + Math.random(),
-      x: caret.x - 2,
-      y: caret.y - 2,
-      driftX: -10 + Math.random() * 22,
-      driftY: 2 + Math.random() * 14,
-      size: 1.3 + Math.random() * 2.4,
-    }));
-    setDust((prev) => [...prev.slice(-14), ...burst]);
-
-    void playChalkScreech();
-    if (Platform.OS !== 'web') {
-      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
-    }
-  }, [active, caret.x, caret.y, press, smear, strokePulse]);
-
-  const removeDust = useCallback((id: number) => {
-    setDust((prev) => prev.filter((mote) => mote.id !== id));
-  }, []);
-
-  const stickStyle = useAnimatedStyle(() => {
-    const shake = tremor.value * 0.55;
-    return {
-      opacity: visible.value,
-      transform: [
-        { translateX: tipX.value - STICK_WIDTH + 4 + shake * 0.4 },
-        { translateY: tipY.value - 5 + shake * 0.25 - press.value * 1.4 },
-        { rotate: `${angle.value - press.value * 4}deg` },
-        { scale: 1 + press.value * 0.07 },
-      ],
-    };
-  });
-
-  const strokeStyle = useAnimatedStyle(() => {
-    const dx = tipX.value - fromX.value;
-    const dy = tipY.value - fromY.value;
-    const length = Math.max(2, Math.sqrt(dx * dx + dy * dy));
-    const rot = (Math.atan2(dy, dx) * 180) / Math.PI;
-    return {
-      opacity: visible.value * smear.value * 0.55,
-      width: length,
-      transform: [
-        { translateX: fromX.value },
-        { translateY: fromY.value - 1.2 },
-        { rotate: `${rot}deg` },
-      ],
-    };
-  });
-
-  const shadeStyle = useAnimatedStyle(() => ({
-    opacity: visible.value * (0.06 + press.value * 0.12),
-    transform: [{ translateX: tipX.value - 4 }, { translateY: tipY.value - 4 }],
-  }));
-
-  if (!active) return null;
-
-  return (
-    <View pointerEvents="none" style={styles.chalkOverlay}>
-      <Animated.View style={[styles.chalkStrokeTrail, strokeStyle, { backgroundColor: chalkColor }]} />
-      <Animated.View style={[styles.chalkShade, shadeStyle]} />
-      {dust.map((mote) => (
-        <DustParticle key={mote.id} mote={mote} color={chalkColor} onDone={removeDust} />
-      ))}
-      <Animated.View style={[styles.chalkStick, stickStyle]}>
-        <View style={[styles.chalkBody, { backgroundColor: chalkColor }]}>
-          <View style={styles.chalkGrain} />
-        </View>
-        <View style={[styles.chalkTip, { borderLeftColor: chalkColor }]} />
-      </Animated.View>
-    </View>
-  );
 }
 
 export function CitizenStickyNotes({ guestId, notes, onUpdated }: Props) {
@@ -425,8 +204,14 @@ export function CitizenStickyNotes({ guestId, notes, onUpdated }: Props) {
   };
 
   const onDraftChange = (text: string) => {
-    if (text.length > draft.length) {
+    const added = text.length - draft.length;
+    if (added > 0) {
       setStrokePulse((pulse) => pulse + 1);
+      // One scrape per new character (cap paste bursts so it stays soft)
+      const strokes = Math.min(added, 8);
+      for (let i = 0; i < strokes; i += 1) {
+        playChalkScreech();
+      }
     }
     setComposerDraft((current) => ({ ...current, text }));
   };
@@ -519,7 +304,7 @@ export function CitizenStickyNotes({ guestId, notes, onUpdated }: Props) {
                 <Text style={[styles.boardDateOrdinal, handMed && { fontFamily: handMed }]}>
                   {boardDate.suffix}
                 </Text>
-                <Text style={[styles.boardDateText, styles.boardDateMonth, hand && { fontFamily: hand }]}>
+                <Text style={[styles.boardDateText, hand && { fontFamily: hand }]}>
                   {' '}
                   {boardDate.month}
                 </Text>
@@ -538,7 +323,10 @@ export function CitizenStickyNotes({ guestId, notes, onUpdated }: Props) {
                   placeholderTextColor="rgba(244,241,224,0.35)"
                   value={draft}
                   onChangeText={onDraftChange}
-                  onFocus={() => setWriting(true)}
+                  onFocus={() => {
+                    setWriting(true);
+                    preloadChalkSound();
+                  }}
                   onBlur={() => setWriting(false)}
                   multiline
                   maxLength={180}
@@ -554,7 +342,7 @@ export function CitizenStickyNotes({ guestId, notes, onUpdated }: Props) {
                   onTextLayout={onMeasureTextLayout}>
                   {draft.length > 0 ? draft : ' '}
                 </Text>
-                <ChalkOnWritingBoard
+                <ChalkWritingHand
                   active={writing}
                   chalkColor={color}
                   caret={caret}
@@ -737,25 +525,20 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(244,241,224,0.12)',
   },
   boardDateRow: {
-    alignSelf: 'stretch',
-    flexDirection: 'row',
-    justifyContent: 'flex-end',
-    marginBottom: 8,
-    paddingRight: 16,
+    position: 'absolute',
+    top: 10,
+    right: 12,
+    zIndex: 2,
   },
   boardDateInner: {
     flexDirection: 'row',
     alignItems: 'flex-start',
     flexShrink: 0,
-    maxWidth: '100%',
   },
   boardDateText: {
     fontSize: 18,
     letterSpacing: 0,
     color: 'rgba(244,241,224,0.78)',
-  },
-  boardDateMonth: {
-    paddingRight: 10,
   },
   boardDateOrdinal: {
     fontSize: 10,
@@ -769,6 +552,7 @@ const styles = StyleSheet.create({
     borderStyle: 'dashed',
     borderRadius: Radius.md,
     padding: Spacing.md,
+    marginTop: 28,
     gap: Spacing.sm,
     backgroundColor: 'rgba(0,0,0,0.12)',
   },
@@ -792,61 +576,6 @@ const styles = StyleSheet.create({
     opacity: 0,
     fontSize: CHALK_FONT_SIZE,
     lineHeight: CHALK_LINE_HEIGHT,
-  },
-  chalkOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    zIndex: 3,
-  },
-  chalkStrokeTrail: {
-    position: 'absolute',
-    height: 2.5,
-    borderRadius: 2,
-    left: 0,
-    top: 0,
-  },
-  chalkShade: {
-    position: 'absolute',
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-    backgroundColor: 'rgba(0,0,0,0.22)',
-  },
-  flyingDust: {
-    position: 'absolute',
-    left: 0,
-    top: 0,
-  },
-  chalkStick: {
-    position: 'absolute',
-    width: STICK_WIDTH,
-    height: 11,
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  chalkBody: {
-    flex: 1,
-    height: 8,
-    borderRadius: 2,
-    overflow: 'hidden',
-  },
-  chalkGrain: {
-    position: 'absolute',
-    top: 2,
-    left: 4,
-    right: 6,
-    height: 1.5,
-    borderRadius: 1,
-    backgroundColor: 'rgba(255,255,255,0.28)',
-  },
-  chalkTip: {
-    width: 0,
-    height: 0,
-    marginLeft: -1,
-    borderTopWidth: 4,
-    borderBottomWidth: 4,
-    borderLeftWidth: 7,
-    borderTopColor: 'transparent',
-    borderBottomColor: 'transparent',
   },
   composerFooter: {
     flexDirection: 'row',
