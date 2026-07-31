@@ -1,10 +1,8 @@
 import { Ionicons } from '@expo/vector-icons';
-import * as ImagePicker from 'expo-image-picker';
-import { useRouter } from 'expo-router';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useNavigation } from 'expo-router';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   Image,
   Pressable,
   ScrollView,
@@ -15,12 +13,17 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { KeyboardAwareScrollView } from '@/components/KeyboardAwareScrollView';
 import { PublicSafetySection } from '@/components/PublicSafetySection';
+import { useKeyboardVerticalOffset } from '@/hooks/useKeyboardVerticalOffset';
+import { useTaskDraft } from '@/hooks/useTaskDraft';
 import { useVolunteer } from '@/context/VolunteerContext';
 import { REPORT_CATEGORIES } from '@/constants/reports';
 import { api } from '@/lib/api';
 import { formatCoords, getCurrentLocation } from '@/lib/location';
+import { promptReportPhoto } from '@/lib/reportPhoto';
 import { Colors, Radius, Spacing } from '@/constants/theme';
+import { townAlert } from '@/context/TownAlertContext';
 
 type GeoState = {
   latitude: number;
@@ -28,18 +31,38 @@ type GeoState = {
   label: string;
 };
 
+type ReportDraft = {
+  title: string;
+  description: string;
+  categoryId: string;
+  photoUri: string | null;
+  locationLabel: string;
+  geo: GeoState | null;
+};
+
+const EMPTY_REPORT_DRAFT: ReportDraft = {
+  title: '',
+  description: '',
+  categoryId: REPORT_CATEGORIES[0].id,
+  photoUri: null,
+  locationLabel: '',
+  geo: null,
+};
+
 export default function NewReportScreen() {
-  const router = useRouter();
+  const navigation = useNavigation();
+  const keyboardOffset = useKeyboardVerticalOffset();
   const { guestId, loading: volunteerLoading, refresh } = useVolunteer();
-  const [title, setTitle] = useState('');
-  const [description, setDescription] = useState('');
-  const [categoryId, setCategoryId] = useState(REPORT_CATEGORIES[0].id);
-  const [photoUri, setPhotoUri] = useState<string | null>(null);
-  const [locationLabel, setLocationLabel] = useState('');
-  const [geo, setGeo] = useState<GeoState | null>(null);
   const [locating, setLocating] = useState(true);
   const [locationError, setLocationError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const { value: draft, setValue: setDraft, hydrated, clearDraft } = useTaskDraft(
+    'report-new',
+    EMPTY_REPORT_DRAFT,
+    { pause: loading }
+  );
+
+  const { title, description, categoryId, photoUri, locationLabel, geo } = draft;
 
   const category = useMemo(
     () => REPORT_CATEGORIES.find((item) => item.id === categoryId) ?? REPORT_CATEGORIES[0],
@@ -52,69 +75,49 @@ export default function NewReportScreen() {
 
     try {
       const point = await getCurrentLocation();
-      setGeo(point);
-      setLocationLabel(point.label);
+      setDraft((current) => ({
+        ...current,
+        geo: point,
+        locationLabel: point.label,
+      }));
     } catch {
       setLocationError('Location permission is required to geotag your report.');
-      setGeo(null);
+      setDraft((current) => ({ ...current, geo: null }));
     } finally {
       setLocating(false);
     }
-  }, []);
+  }, [setDraft]);
 
   useEffect(() => {
+    if (!hydrated) return;
+    if (geo) {
+      setLocating(false);
+      return;
+    }
     captureLocation();
-  }, [captureLocation]);
+  }, [captureLocation, geo, hydrated]);
 
-  const pickPhoto = () => {
-    Alert.alert('Add photo', 'Attach evidence of the issue nearby.', [
-      {
-        text: 'Take photo',
-        onPress: async () => {
-          const permission = await ImagePicker.requestCameraPermissionsAsync();
-          if (!permission.granted) {
-            Alert.alert('Camera access needed', 'Enable camera access to photograph the issue.');
-            return;
-          }
-          const result = await ImagePicker.launchCameraAsync({
-            allowsEditing: true,
-            quality: 0.8,
-          });
-          if (!result.canceled) setPhotoUri(result.assets[0].uri);
-        },
-      },
-      {
-        text: 'Choose from gallery',
-        onPress: async () => {
-          const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
-          if (!permission.granted) {
-            Alert.alert('Photos access needed', 'Enable photo library access to attach an image.');
-            return;
-          }
-          const result = await ImagePicker.launchImageLibraryAsync({
-            allowsEditing: true,
-            quality: 0.8,
-          });
-          if (!result.canceled) setPhotoUri(result.assets[0].uri);
-        },
-      },
-      { text: 'Cancel', style: 'cancel' },
-    ]);
-  };
+  useLayoutEffect(() => {
+    navigation.setOptions({ headerRight: undefined });
+  }, [navigation]);
 
-  const submit = async () => {
+  const pickPhoto = useCallback(() => {
+    promptReportPhoto((uri) => setDraft((current) => ({ ...current, photoUri: uri })));
+  }, [setDraft]);
+
+  const submit = useCallback(async () => {
     if (volunteerLoading || !guestId) {
-      Alert.alert('Please wait', 'Your profile is still loading. Try again in a moment.');
+      townAlert('Please wait', 'Your profile is still loading. Try again in a moment.');
       return;
     }
 
     if (!title.trim()) {
-      Alert.alert('Missing details', 'Add a short title describing the issue.');
+      townAlert('Missing details', 'Add a short title describing the issue.');
       return;
     }
 
     if (!geo) {
-      Alert.alert(
+      townAlert(
         'Location required',
         'Reports must be geotagged so the town can act on them. Refresh your location or enter one manually.'
       );
@@ -133,19 +136,34 @@ export default function NewReportScreen() {
         photo_uri: photoUri ?? undefined,
       });
 
-      await refresh();
-      Alert.alert('Report submitted', 'Thanks for helping improve Hazaribagh.');
-      router.back();
+      await refresh({ reconcile: true });
+      await clearDraft();
+      townAlert('Report submitted', 'Thanks for helping improve Hazaribagh.');
+      navigation.goBack();
     } catch (error) {
-      Alert.alert('Could not submit', error instanceof Error ? error.message : 'Try again.');
+      townAlert('Could not submit', error instanceof Error ? error.message : 'Try again.');
     } finally {
       setLoading(false);
     }
-  };
+  }, [
+    category.label,
+    clearDraft,
+    description,
+    geo,
+    guestId,
+    locationLabel,
+    navigation,
+    photoUri,
+    refresh,
+    title,
+    volunteerLoading,
+  ]);
 
   return (
     <SafeAreaView style={styles.container} edges={['bottom']}>
-      <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+      <KeyboardAwareScrollView
+        contentContainerStyle={styles.content}
+        keyboardVerticalOffset={keyboardOffset}>
         <Text style={styles.formHeading}>Report a civic issue</Text>
         <Text style={styles.formSubheading}>
           Waste, traffic, potholes, streetlights, governance — geotagged for the town.
@@ -159,7 +177,7 @@ export default function NewReportScreen() {
               <Pressable
                 key={item.id}
                 style={[styles.chip, active && styles.chipActive]}
-                onPress={() => setCategoryId(item.id)}>
+                onPress={() => setDraft((current) => ({ ...current, categoryId: item.id }))}>
                 <Ionicons
                   name={item.icon}
                   size={16}
@@ -177,7 +195,7 @@ export default function NewReportScreen() {
           placeholder="Issue title"
           placeholderTextColor={Colors.textMuted}
           value={title}
-          onChangeText={setTitle}
+          onChangeText={(value) => setDraft((current) => ({ ...current, title: value }))}
         />
         <TextInput
           style={[styles.input, styles.textArea]}
@@ -185,7 +203,7 @@ export default function NewReportScreen() {
           placeholderTextColor={Colors.textMuted}
           multiline
           value={description}
-          onChangeText={setDescription}
+          onChangeText={(value) => setDraft((current) => ({ ...current, description: value }))}
         />
 
         <Text style={styles.sectionLabel}>Location</Text>
@@ -197,10 +215,10 @@ export default function NewReportScreen() {
             </View>
             <Pressable style={styles.refreshButton} onPress={captureLocation} disabled={locating}>
               {locating ? (
-                <ActivityIndicator size="small" color={Colors.primary} />
+                <ActivityIndicator size="small" color={Colors.white} />
               ) : (
                 <>
-                  <Ionicons name="refresh-outline" size={16} color={Colors.primary} />
+                  <Ionicons name="refresh-outline" size={16} color={Colors.white} />
                   <Text style={styles.refreshText}>Refresh</Text>
                 </>
               )}
@@ -223,16 +241,23 @@ export default function NewReportScreen() {
             placeholder="Landmark or address (optional edit)"
             placeholderTextColor={Colors.textMuted}
             value={locationLabel}
-            onChangeText={setLocationLabel}
+            onChangeText={(value) => setDraft((current) => ({ ...current, locationLabel: value }))}
           />
         </View>
 
         <Text style={styles.sectionLabel}>Photo evidence</Text>
         <Pressable style={styles.photoButton} onPress={pickPhoto}>
-          <Ionicons name="camera-outline" size={22} color={Colors.primary} />
-          <Text style={styles.photoText}>{photoUri ? 'Change photo' : 'Add photo'}</Text>
+          <Ionicons name={photoUri ? 'image-outline' : 'camera-outline'} size={22} color={Colors.primary} />
+          <Text style={styles.photoText}>{photoUri ? 'Change photo' : 'Take or upload photo'}</Text>
         </Pressable>
-        {photoUri ? <Image source={{ uri: photoUri }} style={styles.preview} /> : null}
+        {photoUri ? (
+          <View style={styles.previewWrap}>
+            <Image source={{ uri: photoUri }} style={styles.preview} />
+            <Pressable style={styles.removePhoto} onPress={() => setDraft((current) => ({ ...current, photoUri: null }))} hitSlop={8}>
+              <Ionicons name="close-circle" size={22} color={Colors.white} />
+            </Pressable>
+          </View>
+        ) : null}
 
         <Pressable style={styles.submit} onPress={submit} disabled={loading || locating}>
           {loading ? (
@@ -253,7 +278,7 @@ export default function NewReportScreen() {
           locationError={locationError}
           onRefreshLocation={captureLocation}
         />
-      </ScrollView>
+      </KeyboardAwareScrollView>
     </SafeAreaView>
   );
 }
@@ -269,7 +294,7 @@ const styles = StyleSheet.create({
   formHeading: {
     fontSize: 20,
     fontWeight: '800',
-    color: Colors.text,
+    color: Colors.primary,
   },
   formSubheading: {
     fontSize: 13,
@@ -282,43 +307,66 @@ const styles = StyleSheet.create({
     marginBottom: Spacing.xs,
     fontSize: 13,
     fontWeight: '700',
-    color: Colors.textSecondary,
+    color: Colors.primary,
     textTransform: 'uppercase',
     letterSpacing: 0.6,
   },
   input: {
     backgroundColor: Colors.white,
-    borderWidth: 1,
-    borderColor: Colors.border,
+    borderWidth: 1.5,
+    borderColor: Colors.primaryLight,
     borderRadius: Radius.md,
     paddingHorizontal: Spacing.md,
     paddingVertical: 14,
     fontSize: 15,
     color: Colors.text,
+    shadowColor: '#1A1A1A',
+    shadowOpacity: 0.08,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 3,
   },
   textArea: { minHeight: 110, textAlignVertical: 'top' },
-  chips: { gap: Spacing.sm, paddingBottom: Spacing.xs },
+  chips: { gap: Spacing.sm, paddingBottom: Spacing.xs, paddingTop: 2 },
   chip: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
     paddingHorizontal: 14,
-    paddingVertical: 10,
+    paddingVertical: 11,
     borderRadius: Radius.pill,
-    backgroundColor: Colors.card,
-    borderWidth: 1,
-    borderColor: Colors.border,
+    backgroundColor: Colors.white,
+    borderWidth: 1.5,
+    borderColor: Colors.primaryLight,
+    shadowColor: '#1A1A1A',
+    shadowOpacity: 0.08,
+    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 2,
   },
-  chipActive: { backgroundColor: Colors.primary, borderColor: Colors.primary },
-  chipText: { color: Colors.text, fontWeight: '600', fontSize: 13 },
+  chipActive: {
+    backgroundColor: Colors.primary,
+    borderColor: Colors.primaryDark,
+    shadowColor: Colors.primary,
+    shadowOpacity: 0.35,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 5,
+  },
+  chipText: { color: Colors.primary, fontWeight: '700', fontSize: 13 },
   chipTextActive: { color: Colors.white },
   locationCard: {
     backgroundColor: Colors.white,
-    borderWidth: 1,
-    borderColor: Colors.border,
+    borderWidth: 1.5,
+    borderColor: Colors.primaryLight,
     borderRadius: Radius.lg,
     padding: Spacing.md,
     gap: Spacing.sm,
+    shadowColor: '#1A1A1A',
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 4,
   },
   locationHeader: {
     flexDirection: 'row',
@@ -341,13 +389,20 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
     borderRadius: Radius.pill,
-    backgroundColor: Colors.greenLight,
+    backgroundColor: Colors.primary,
+    borderWidth: 1,
+    borderColor: Colors.primaryDark,
+    shadowColor: Colors.primary,
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 3,
   },
   refreshText: {
-    color: Colors.primary,
+    color: Colors.white,
     fontWeight: '700',
     fontSize: 13,
   },
@@ -368,6 +423,9 @@ const styles = StyleSheet.create({
   },
   locationInput: {
     marginTop: Spacing.xs,
+    borderColor: Colors.border,
+    elevation: 0,
+    shadowOpacity: 0,
   },
   photoButton: {
     flexDirection: 'row',
@@ -375,10 +433,35 @@ const styles = StyleSheet.create({
     gap: Spacing.sm,
     padding: Spacing.md,
     borderRadius: Radius.md,
-    backgroundColor: Colors.greenLight,
+    backgroundColor: Colors.white,
+    borderWidth: 1.5,
+    borderColor: Colors.primary,
+    shadowColor: '#1A1A1A',
+    shadowOpacity: 0.1,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 3,
   },
-  photoText: { color: Colors.primary, fontWeight: '600' },
-  preview: { width: '100%', height: 180, borderRadius: Radius.lg },
+  photoText: { color: Colors.primary, fontWeight: '700' },
+  previewWrap: {
+    position: 'relative',
+    borderRadius: Radius.lg,
+    overflow: 'hidden',
+  },
+  preview: {
+    width: '100%',
+    height: 180,
+    borderRadius: Radius.lg,
+    borderWidth: 1.5,
+    borderColor: Colors.primaryLight,
+  },
+  removePhoto: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    backgroundColor: 'rgba(26,26,26,0.45)',
+    borderRadius: 12,
+  },
   submit: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -388,6 +471,13 @@ const styles = StyleSheet.create({
     borderRadius: Radius.pill,
     paddingVertical: 16,
     marginTop: Spacing.md,
+    borderWidth: 1.5,
+    borderColor: Colors.primaryDark,
+    shadowColor: Colors.primaryDark,
+    shadowOpacity: 0.35,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 5 },
+    elevation: 6,
   },
-  submitText: { color: Colors.white, fontWeight: '700', fontSize: 16 },
+  submitText: { color: Colors.white, fontWeight: '800', fontSize: 16 },
 });

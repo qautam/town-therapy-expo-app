@@ -26,15 +26,6 @@ export type CommunityPost = {
   featured?: boolean;
 };
 
-export type CommunityWin = {
-  id: string;
-  icon: 'sparkles' | 'trophy';
-  title: string;
-  description: string;
-  author: string;
-  likes: number;
-};
-
 export type Badge = {
   id: string;
   label: string;
@@ -42,6 +33,9 @@ export type Badge = {
   color: string;
   bgColor: string;
   locked?: boolean;
+  /** Reddit-award style rarity ring */
+  tier?: 'bronze' | 'silver' | 'gold' | 'platinum' | 'coral';
+  description?: string;
 };
 
 export const brand = {
@@ -58,6 +52,12 @@ export const brand = {
   website: 'https://towntherapy.club',
 };
 
+/** Demo volunteer identity used across local seed data and UI fallbacks. */
+export const demoVolunteer = {
+  name: 'Gautam',
+  email: 'gautam@towntherapy.app',
+};
+
 export const user = {
   name: 'Town Admin',
   greeting: 'Town',
@@ -68,7 +68,7 @@ export const user = {
   interests: 'Governance',
   skills: 'Coordination',
   availability: 'Weekends',
-  dashboard: { issues: 2, resolved: 1, neighbors: 2 },
+  dashboard: { drives_completed: 3, issues_reported: 3, issues_resolved: 1 },
 };
 
 export const events: Event[] = [
@@ -101,27 +101,6 @@ export const events: Event[] = [
       'https://images.unsplash.com/photo-1464226184884-fa280b87c399?w=800&q=80',
     attendees: 3,
     isGoing: false,
-  },
-];
-
-export const communityWins: CommunityWin[] = [
-  {
-    id: '1',
-    icon: 'sparkles',
-    title: 'The alley finally shines again!',
-    description:
-      'After weeks of reports and a weekend cleanup, the Maple Alley corridor is clean and safe again.',
-    author: 'Ravi Kumar',
-    likes: 0,
-  },
-  {
-    id: '2',
-    icon: 'trophy',
-    title: 'Local hero: Ravi',
-    description:
-      'Ravi coordinated three neighbors to fix the broken bench near the playground.',
-    author: 'Town Admin',
-    likes: 2,
   },
 ];
 
@@ -162,15 +141,7 @@ export const communityPosts: CommunityPost[] = [
   },
 ];
 
-export const badges: Badge[] = [
-  { id: '1', label: 'First Report', icon: 'flag', color: Colors.orange, bgColor: Colors.orangeLight },
-  { id: '2', label: 'First Cleanup', icon: 'sparkles', color: Colors.primary, bgColor: Colors.greenLight },
-  { id: '3', label: 'Active Volunteer', icon: 'hand-left', color: Colors.primary, bgColor: Colors.greenLight },
-  { id: '4', label: 'Community Hero', icon: 'trophy', color: Colors.red, bgColor: Colors.pinkLight },
-  { id: '5', label: '10 Events Joined', icon: 'calendar', color: Colors.orange, bgColor: Colors.orangeLight },
-  { id: '6', label: '25 Issues Reported', icon: 'megaphone', color: Colors.textMuted, bgColor: Colors.locked, locked: true },
-  { id: '7', label: 'Tree Planter', icon: 'leaf', color: Colors.primary, bgColor: Colors.greenLight },
-];
+export const badges: Badge[] = [];
 
 export const communityFilters = ['All', 'Success', 'Before/After', 'Volunteer', 'Local Hero'];
 

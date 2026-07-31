@@ -1,5 +1,4 @@
 import { useRouter } from 'expo-router';
-import * as Notifications from 'expo-notifications';
 import {
   createContext,
   useCallback,
@@ -12,7 +11,11 @@ import {
 
 import { useVolunteer } from '@/context/VolunteerContext';
 import { api } from '@/lib/api';
-import { getPushPlatform, registerForPushNotificationsAsync } from '@/lib/pushNotifications';
+import {
+  addNotificationResponseListener,
+  getPushPlatform,
+  registerForPushNotificationsAsync,
+} from '@/lib/pushNotifications';
 
 type PushNotificationContextValue = {
   syncPushRegistration: () => Promise<void>;
@@ -28,19 +31,13 @@ export function PushNotificationProvider({ children }: { children: ReactNode }) 
   const syncPushRegistration = useCallback(async () => {
     if (!guestId) return;
 
+    // Always keep a device token so SOS "help on the way" can reach the requester,
+    // even if they turned off event update emails.
     const wantsEventUpdates = newsletter?.event_updates ?? false;
-    if (!wantsEventUpdates) {
-      if (lastTokenRef.current) {
-        await api.removePushToken(guestId, lastTokenRef.current);
-        lastTokenRef.current = null;
-      }
-      return;
-    }
-
     const token = await registerForPushNotificationsAsync();
     if (!token) return;
 
-    await api.registerPushToken(guestId, token, getPushPlatform(), true);
+    await api.registerPushToken(guestId, token, getPushPlatform(), wantsEventUpdates);
     lastTokenRef.current = token;
   }, [guestId, newsletter?.event_updates]);
 
@@ -49,10 +46,19 @@ export function PushNotificationProvider({ children }: { children: ReactNode }) 
   }, [syncPushRegistration]);
 
   useEffect(() => {
-    const subscription = Notifications.addNotificationResponseReceivedListener((response) => {
-      const screen = response.notification.request.content.data?.screen;
+    const subscription = addNotificationResponseListener((response) => {
+      const data = response.notification.request.content.data;
+      const screen = data?.screen;
+      const alertId = typeof data?.alertId === 'string' ? data.alertId : null;
       if (screen === 'events') {
         router.push('/(tabs)/events');
+      } else if (
+        (data?.type === 'emergency_help_on_way' || data?.type === 'emergency_alert') &&
+        alertId
+      ) {
+        router.push(`/sos/${alertId}`);
+      } else if (data?.type === 'emergency_alert') {
+        router.push('/report/new');
       }
     });
 

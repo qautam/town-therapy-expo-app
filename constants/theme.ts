@@ -3,14 +3,17 @@ export const Colors = {
   primary: '#2D4F4F',
   primaryDark: '#243F3F',
   primaryLight: '#3A6565',
-  background: '#F9F8F3',
+  /** Bright teal for taglines on photo surfaces */
+  brandTeal: '#7ADEDD',
+  /** Soft green page canvas — keeps brand, stays readable */
+  background: '#E8EFEF',
   card: '#F3EDE3',
   cardLight: '#FAF7F2',
   white: '#FFFFFF',
   text: '#1A1A1A',
   textSecondary: '#6B6B6B',
   textMuted: '#9A9A9A',
-  border: '#E8E2D8',
+  border: '#C5D4D4',
   orange: '#E8874A',
   orangeLight: '#FDF0E6',
   greenLight: '#E8EFEF',
@@ -20,6 +23,10 @@ export const Colors = {
   tealLight: '#E0EBEB',
   goldLight: '#FDF6E3',
   locked: '#D5D0C8',
+  /** Readable silver accents on dark / orange surfaces */
+  silver: '#C8C8D4',
+  silverBright: '#F2F2F7',
+  silverMuted: '#8E8E98',
 };
 
 export const Spacing = {

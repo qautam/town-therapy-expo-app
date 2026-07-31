@@ -1,5 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
@@ -15,8 +15,11 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { EmptyState, ScreenHeader } from '@/components/SectionHeader';
 import { useVolunteer } from '@/context/VolunteerContext';
 import { api } from '@/lib/api';
+import { cacheGetOrFetch, cacheGetStale, cacheInvalidate, cacheOnInvalidate } from '@/lib/queryCache';
 import { Colors, Radius, Spacing } from '@/constants/theme';
 import type { Report } from '@/types/database';
+
+const REPORTS_TTL_MS = 60_000;
 
 function ReportCard({ report }: { report: Report }) {
   const statusColor =
@@ -62,24 +65,67 @@ export default function ReportsScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
-  const loadReports = useCallback(async () => {
-    if (!guestId) {
-      setReports([]);
-      return;
-    }
-    const data = await api.listReports(guestId);
-    setReports(data);
-  }, [guestId]);
+  const loadReports = useCallback(
+    async (force = false) => {
+      if (!guestId) {
+        setReports([]);
+        setLoading(false);
+        return;
+      }
+      const data = await cacheGetOrFetch(
+        `reports:${guestId}`,
+        REPORTS_TTL_MS,
+        () => api.listReports(guestId),
+        {
+          force,
+          onCacheHit: (cached) => {
+            setReports(cached);
+            setLoading(false);
+          },
+        }
+      );
+      setReports(data);
+    },
+    [guestId]
+  );
+
+  useFocusEffect(
+    useCallback(() => {
+      let active = true;
+      (async () => {
+        try {
+          await loadReports(false);
+        } finally {
+          if (active) setLoading(false);
+        }
+      })();
+      return () => {
+        active = false;
+      };
+    }, [loadReports])
+  );
 
   useEffect(() => {
-    loadReports().finally(() => setLoading(false));
-  }, [loadReports]);
+    if (!guestId) return;
+    return cacheOnInvalidate(`reports:${guestId}`, () => {
+      const cached = cacheGetStale<Report[]>(`reports:${guestId}`);
+      if (cached) {
+        setReports(cached.value);
+        setLoading(false);
+      }
+      void loadReports(true);
+    });
+  }, [guestId, loadReports]);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
-    await loadReports();
-    setRefreshing(false);
-  }, [loadReports]);
+    try {
+      if (guestId) cacheInvalidate(`reports:${guestId}`);
+      await loadReports(true);
+    } finally {
+      setRefreshing(false);
+    }
+  }, [guestId, loadReports]);
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
@@ -91,28 +137,36 @@ export default function ReportsScreen() {
       <View style={styles.content}>
         <Pressable style={styles.reportButton} onPress={() => router.push('/report/new')}>
           <View style={styles.reportIcon}>
-            <Ionicons name="add" size={22} color={Colors.primary} />
+            <Ionicons name="add" size={22} color={Colors.white} />
           </View>
-          <Text style={styles.reportText}>Report an issue</Text>
+          <View style={styles.reportCopy}>
+            <Text style={styles.reportText}>Report an issue</Text>
+            <Text style={styles.reportSubtext}>Geotag · photo · send to town</Text>
+          </View>
+          <Ionicons name="chevron-forward" size={20} color={Colors.white} />
         </Pressable>
 
         {loading ? (
           <ActivityIndicator color={Colors.primary} style={styles.loader} />
-        ) : reports.length === 0 ? (
-          <EmptyState
-            icon="megaphone-outline"
-            title="No reports yet"
-            description="Spot a broken light or overflowing bin? Tap Report to log it — every report drives real change."
-          />
         ) : (
           <ScrollView
             showsVerticalScrollIndicator={false}
+            contentContainerStyle={[
+              styles.listContent,
+              reports.length === 0 && styles.emptyListContent,
+            ]}
             refreshControl={
               <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={Colors.primary} />
             }>
-            {reports.map((report) => (
-              <ReportCard key={report.id} report={report} />
-            ))}
+            {reports.length === 0 ? (
+              <EmptyState
+                icon="megaphone-outline"
+                title="No reports yet"
+                description="Spot a broken light or overflowing bin? Tap Report to log it — every report drives real change."
+              />
+            ) : (
+              reports.map((report) => <ReportCard key={report.id} report={report} />)
+            )}
           </ScrollView>
         )}
       </View>
@@ -133,28 +187,53 @@ const styles = StyleSheet.create({
   reportButton: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
     backgroundColor: Colors.primary,
-    borderRadius: Radius.pill,
+    borderRadius: Radius.xl,
     paddingVertical: 16,
-    gap: Spacing.sm,
+    paddingHorizontal: Spacing.md,
+    gap: Spacing.md,
     marginBottom: Spacing.lg,
+    borderWidth: 1,
+    borderColor: Colors.primaryDark,
+    shadowColor: Colors.primary,
+    shadowOpacity: 0.28,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 5,
   },
   reportIcon: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: Colors.white,
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.35)',
     alignItems: 'center',
     justifyContent: 'center',
   },
+  reportCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
   reportText: {
     color: Colors.white,
-    fontSize: 16,
-    fontWeight: '700',
+    fontSize: 17,
+    fontWeight: '800',
+  },
+  reportSubtext: {
+    marginTop: 2,
+    color: 'rgba(255,255,255,0.82)',
+    fontSize: 12,
+    fontWeight: '600',
   },
   loader: {
     marginTop: Spacing.xl,
+  },
+  listContent: {
+    paddingBottom: Spacing.xl,
+  },
+  emptyListContent: {
+    flexGrow: 1,
   },
   card: {
     backgroundColor: Colors.white,

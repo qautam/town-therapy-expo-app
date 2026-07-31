@@ -10,7 +10,7 @@ type Props = {
   onAction?: () => void;
 };
 
-export function SectionHeader({ title, actionLabel = 'See all', onAction }: Props) {
+export function SectionHeader({ title, actionLabel, onAction }: Props) {
   return (
     <View style={styles.row}>
       <Text style={styles.title}>{title}</Text>
@@ -54,7 +54,9 @@ export function EmptyState({
 }) {
   return (
     <View style={styles.empty}>
-      <Ionicons name={icon} size={48} color={Colors.textMuted} />
+      <View style={styles.emptyIconWrap}>
+        <Ionicons name={icon} size={40} color={Colors.primary} />
+      </View>
       <Text style={styles.emptyTitle}>{title}</Text>
       <Text style={styles.emptyText}>{description}</Text>
     </View>
@@ -108,14 +110,27 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: Spacing.xl,
-    paddingBottom: 80,
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: Spacing.xl,
+    backgroundColor: Colors.white,
+    borderRadius: Radius.lg,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  emptyIconWrap: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.greenLight,
   },
   emptyTitle: {
     marginTop: Spacing.md,
     fontSize: 18,
     fontWeight: '700',
     color: Colors.text,
+    textAlign: 'center',
   },
   emptyText: {
     marginTop: Spacing.sm,

@@ -2,7 +2,6 @@ import { Ionicons } from '@expo/vector-icons';
 import { useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   Linking,
   Pressable,
   ScrollView,
@@ -13,9 +12,14 @@ import {
 } from 'react-native';
 
 import { EMERGENCY_CONTACTS } from '@/constants/emergency';
+import { useEmergencyAlerts } from '@/context/EmergencyAlertContext';
+import { useTaskDraft } from '@/hooks/useTaskDraft';
 import { api } from '@/lib/api';
+import { getErrorMessage } from '@/lib/errors';
 import { formatCoords, mapsUrl, type GeoPoint } from '@/lib/location';
+import { formatPhoneDisplay, normalizePhone, phoneTelUrl } from '@/lib/phone';
 import { Colors, Radius, Spacing } from '@/constants/theme';
+import { townAlert } from '@/context/TownAlertContext';
 
 type Props = {
   guestId: string | null;
@@ -25,6 +29,16 @@ type Props = {
   onRefreshLocation: () => void;
 };
 
+type SafetyDraft = {
+  message: string;
+  phone: string;
+};
+
+const EMPTY_SAFETY_DRAFT: SafetyDraft = {
+  message: '',
+  phone: '',
+};
+
 export function PublicSafetySection({
   guestId,
   geo,
@@ -32,19 +46,42 @@ export function PublicSafetySection({
   locationError,
   onRefreshLocation,
 }: Props) {
-  const [message, setMessage] = useState('');
   const [alerting, setAlerting] = useState(false);
-  const [activeAlertId, setActiveAlertId] = useState<string | null>(null);
+  const [resolving, setResolving] = useState(false);
+  const { value: draft, setValue: setDraft, clearDraft } = useTaskDraft(
+    'public-safety',
+    EMPTY_SAFETY_DRAFT,
+    { pause: alerting }
+  );
+  const { message, phone } = draft;
+  const { trackingAlert, openSosTracking, refreshAlerts } = useEmergencyAlerts();
+
+  const isRequester = Boolean(guestId && trackingAlert && trackingAlert.guest_id === guestId);
+  const isResponder = Boolean(
+    guestId && trackingAlert && trackingAlert.responded_by_guest_id === guestId
+  );
+  const hasActiveSos = Boolean(trackingAlert && (isRequester || isResponder));
+  const isLive =
+    Boolean(trackingAlert) &&
+    trackingAlert!.status === 'responding' &&
+    Boolean(trackingAlert!.responded_by_name);
+
+  const peerName = isRequester
+    ? trackingAlert?.responded_by_name || 'Volunteer'
+    : trackingAlert?.citizen_name || 'Citizen';
+  const peerPhone = isRequester
+    ? trackingAlert?.responder_phone ?? null
+    : trackingAlert?.citizen_phone ?? null;
 
   const callEmergency = (number: string, label: string) => {
-    Alert.alert(`Call ${label}?`, `This will dial ${number} on your phone.`, [
+    townAlert(`Call ${label}?`, `This will dial ${number} on your phone.`, [
       { text: 'Cancel', style: 'cancel' },
       {
         text: 'Call now',
         style: 'destructive',
         onPress: () => {
           Linking.openURL(`tel:${number}`).catch(() => {
-            Alert.alert('Cannot place call', 'Your device could not open the phone dialer.');
+            townAlert('Cannot place call', 'Your device could not open the phone dialer.');
           });
         },
       },
@@ -53,45 +90,62 @@ export function PublicSafetySection({
 
   const alertVolunteers = async () => {
     if (!guestId) {
-      Alert.alert('Please wait', 'Your device profile is still loading.');
+      townAlert('Please wait', 'Your device profile is still loading.');
       return;
     }
 
     if (!geo) {
-      Alert.alert('Location required', 'Enable location so volunteers know where to find you.');
+      townAlert('Location required', 'Enable location so volunteers know where to find you.');
+      return;
+    }
+
+    const normalizedPhone = normalizePhone(phone);
+    if (!normalizedPhone) {
+      townAlert('Phone required', 'Enter your 10-digit phone number so a volunteer can call you.');
       return;
     }
 
     setAlerting(true);
     try {
-      const alert = await api.createEmergencyAlert(guestId, {
+      await api.createEmergencyAlert(guestId, {
         location_label: geo.label,
         latitude: geo.latitude,
         longitude: geo.longitude,
+        phone: normalizedPhone,
         message: message.trim() || undefined,
       });
-      setActiveAlertId(alert.id);
-      Alert.alert(
+      await refreshAlerts();
+      await clearDraft();
+      setDraft(EMPTY_SAFETY_DRAFT);
+      townAlert(
         'Volunteers alerted',
-        'Your live location was shared with Town Therapy volunteers and admins. Someone should reach out soon. For life-threatening emergencies, also call 112.'
+        'Your live location and phone number were shared privately with the volunteer who responds. For life-threatening emergencies, also call 112.'
       );
     } catch (error) {
-      Alert.alert('Could not alert volunteers', error instanceof Error ? error.message : 'Try again.');
+      townAlert('Could not alert volunteers', getErrorMessage(error));
     } finally {
       setAlerting(false);
     }
   };
 
   const resolveAlert = async () => {
-    if (!activeAlertId) return;
+    if (!trackingAlert) return;
 
+    setResolving(true);
     try {
-      await api.resolveEmergencyAlert(activeAlertId);
-      setActiveAlertId(null);
-      Alert.alert('Alert cleared', 'Your emergency alert has been marked as resolved.');
+      await api.resolveEmergencyAlert(trackingAlert.id);
+      await refreshAlerts();
+      townAlert('Alert cleared', 'Your emergency alert has been marked as resolved.');
     } catch (error) {
-      Alert.alert('Could not clear alert', error instanceof Error ? error.message : 'Try again.');
+      townAlert('Could not clear alert', getErrorMessage(error));
+    } finally {
+      setResolving(false);
     }
+  };
+
+  const callPeer = () => {
+    if (!peerPhone) return;
+    Linking.openURL(phoneTelUrl(peerPhone)).catch(() => undefined);
   };
 
   return (
@@ -113,10 +167,10 @@ export function PublicSafetySection({
           <Text style={styles.locationTitle}>Your live location</Text>
           <Pressable style={styles.refreshButton} onPress={onRefreshLocation} disabled={locating}>
             {locating ? (
-              <ActivityIndicator size="small" color={Colors.primary} />
+              <ActivityIndicator size="small" color={Colors.white} />
             ) : (
               <>
-                <Ionicons name="refresh-outline" size={14} color={Colors.primary} />
+                <Ionicons name="refresh-outline" size={14} color={Colors.white} />
                 <Text style={styles.refreshText}>Refresh</Text>
               </>
             )}
@@ -138,37 +192,127 @@ export function PublicSafetySection({
         )}
       </View>
 
-      <TextInput
-        style={styles.messageInput}
-        placeholder="What's happening? (optional — e.g. accident, medical, unsafe area)"
-        placeholderTextColor={Colors.textMuted}
-        value={message}
-        onChangeText={setMessage}
-        multiline
-      />
+      {hasActiveSos && trackingAlert ? (
+        <View style={styles.activeAlertColumn}>
+          {isLive ? (
+            <View style={styles.liveSession}>
+              <View style={styles.liveHeader}>
+                <View style={styles.liveDot} />
+                <Text style={styles.liveStatus}>
+                  {isResponder ? 'Helping' : 'On the way'}
+                </Text>
+              </View>
 
-      {activeAlertId ? (
-        <View style={styles.activeAlertBox}>
-          <Ionicons name="radio-outline" size={18} color={Colors.red} />
-          <Text style={styles.activeAlertText}>Volunteers & admins have your location</Text>
-          <Pressable onPress={resolveAlert}>
-            <Text style={styles.clearAlertText}>I'm safe now</Text>
-          </Pressable>
-        </View>
-      ) : (
-        <Pressable
-          style={[styles.sosButton, (!geo || alerting) && styles.sosButtonDisabled]}
-          onPress={alertVolunteers}
-          disabled={!geo || alerting}>
-          {alerting ? (
-            <ActivityIndicator color={Colors.white} />
+              <Text style={styles.liveName} numberOfLines={1}>
+                {peerName}
+              </Text>
+
+              {peerPhone ? (
+                <Pressable style={styles.phoneRow} onPress={callPeer} hitSlop={6}>
+                  <Text style={styles.livePhone}>{formatPhoneDisplay(peerPhone)}</Text>
+                  <View style={styles.callIcon}>
+                    <Ionicons name="call" size={14} color={Colors.white} />
+                  </View>
+                </Pressable>
+              ) : (
+                <Text style={styles.contactHint}>Phone shared when available</Text>
+              )}
+
+              <Pressable
+                style={styles.trackButton}
+                onPress={() => openSosTracking(trackingAlert.id)}>
+                <Ionicons name="navigate-outline" size={17} color={Colors.white} />
+                <Text style={styles.trackButtonText}>Live tracking</Text>
+              </Pressable>
+
+              <Pressable
+                style={[styles.resolveLink, resolving && styles.resolveDisabled]}
+                onPress={resolveAlert}
+                disabled={resolving}
+                hitSlop={8}>
+                {resolving ? (
+                  <ActivityIndicator size="small" color={Colors.textMuted} />
+                ) : (
+                  <Text style={styles.resolveLinkText}>
+                    {isRequester ? "I'm safe now" : 'Mark resolved'}
+                  </Text>
+                )}
+              </Pressable>
+            </View>
           ) : (
             <>
-              <Ionicons name="alert-circle" size={20} color={Colors.white} />
-              <Text style={styles.sosButtonText}>Alert volunteers & admins</Text>
+              <View style={[styles.activeAlertBox, isResponder && styles.activeAlertBoxHelper]}>
+                <Ionicons
+                  name={isResponder ? 'walk-outline' : 'radio-outline'}
+                  size={18}
+                  color={isResponder ? Colors.primary : Colors.red}
+                />
+                <View style={styles.activeAlertCopy}>
+                  <Text
+                    style={[
+                      styles.activeAlertText,
+                      isResponder && styles.activeAlertTextHelper,
+                    ]}>
+                    Waiting for a volunteer — your number stays private until they respond
+                  </Text>
+                  <Text style={styles.activeAlertSub}>
+                    Volunteers and admins have your SOS location
+                  </Text>
+                </View>
+              </View>
+
+              <Pressable
+                style={[styles.resolveButton, resolving && styles.resolveDisabled]}
+                onPress={resolveAlert}
+                disabled={resolving}>
+                {resolving ? (
+                  <ActivityIndicator color={Colors.white} />
+                ) : (
+                  <Text style={styles.resolveButtonText}>I'm safe now — resolve SOS</Text>
+                )}
+              </Pressable>
             </>
           )}
-        </Pressable>
+        </View>
+      ) : (
+        <>
+          <TextInput
+            style={styles.messageInput}
+            placeholder="What's happening? (optional — e.g. accident, medical, unsafe area)"
+            placeholderTextColor={Colors.textMuted}
+            value={message}
+            onChangeText={(value) => setDraft((current) => ({ ...current, message: value }))}
+            multiline
+          />
+
+          <Text style={styles.phoneLabel}>Your phone number</Text>
+          <TextInput
+            style={styles.phoneInput}
+            placeholder="10-digit mobile number"
+            placeholderTextColor={Colors.textMuted}
+            value={phone}
+            onChangeText={(value) => setDraft((current) => ({ ...current, phone: value }))}
+            keyboardType="phone-pad"
+            maxLength={14}
+          />
+          <Text style={styles.phoneHint}>
+            Shared only with the volunteer who taps “I'm on my way” — not with everyone.
+          </Text>
+
+          <Pressable
+            style={[styles.sosButton, (!geo || alerting) && styles.sosButtonDisabled]}
+            onPress={alertVolunteers}
+            disabled={!geo || alerting}>
+            {alerting ? (
+              <ActivityIndicator color={Colors.white} />
+            ) : (
+              <>
+                <Ionicons name="alert-circle" size={20} color={Colors.white} />
+                <Text style={styles.sosButtonText}>Alert volunteers & admins</Text>
+              </>
+            )}
+          </Pressable>
+        </>
       )}
 
       <Text style={styles.emergencyLabel}>Emergency numbers (India)</Text>
@@ -234,11 +378,16 @@ const styles = StyleSheet.create({
   },
   locationCard: {
     backgroundColor: Colors.white,
-    borderWidth: 1,
-    borderColor: Colors.border,
+    borderWidth: 1.5,
+    borderColor: Colors.primaryLight,
     borderRadius: Radius.lg,
     padding: Spacing.md,
     gap: 4,
+    shadowColor: '#1A1A1A',
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 4,
   },
   locationHeader: {
     flexDirection: 'row',
@@ -255,13 +404,15 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
     borderRadius: Radius.pill,
-    backgroundColor: Colors.greenLight,
+    backgroundColor: Colors.primary,
+    borderWidth: 1,
+    borderColor: Colors.primaryDark,
   },
   refreshText: {
-    color: Colors.primary,
+    color: Colors.white,
     fontWeight: '700',
     fontSize: 12,
   },
@@ -293,8 +444,8 @@ const styles = StyleSheet.create({
   },
   messageInput: {
     backgroundColor: Colors.white,
-    borderWidth: 1,
-    borderColor: Colors.border,
+    borderWidth: 1.5,
+    borderColor: Colors.primaryLight,
     borderRadius: Radius.md,
     paddingHorizontal: Spacing.md,
     paddingVertical: 12,
@@ -302,6 +453,33 @@ const styles = StyleSheet.create({
     color: Colors.text,
     minHeight: 72,
     textAlignVertical: 'top',
+    shadowColor: '#1A1A1A',
+    shadowOpacity: 0.08,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 3,
+  },
+  phoneLabel: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: Colors.text,
+  },
+  phoneInput: {
+    backgroundColor: Colors.white,
+    borderWidth: 1.5,
+    borderColor: Colors.primaryLight,
+    borderRadius: Radius.md,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: 12,
+    fontSize: 16,
+    fontWeight: '600',
+    color: Colors.text,
+  },
+  phoneHint: {
+    marginTop: -2,
+    fontSize: 12,
+    lineHeight: 17,
+    color: Colors.textMuted,
   },
   sosButton: {
     flexDirection: 'row',
@@ -311,6 +489,13 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.red,
     borderRadius: Radius.pill,
     paddingVertical: 15,
+    borderWidth: 1.5,
+    borderColor: '#8E2419',
+    shadowColor: Colors.red,
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 5,
   },
   sosButtonDisabled: {
     opacity: 0.55,
@@ -320,6 +505,91 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     fontSize: 15,
   },
+  activeAlertColumn: {
+    gap: Spacing.sm,
+  },
+  liveSession: {
+    backgroundColor: Colors.tealLight,
+    borderRadius: Radius.xl,
+    paddingVertical: Spacing.md + 2,
+    paddingHorizontal: Spacing.md,
+    gap: 10,
+  },
+  liveHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  liveDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+    backgroundColor: Colors.primary,
+  },
+  liveStatus: {
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+    color: Colors.primary,
+  },
+  liveName: {
+    fontSize: 22,
+    fontWeight: '700',
+    color: Colors.text,
+    letterSpacing: -0.3,
+    marginTop: -2,
+  },
+  phoneRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: Spacing.md,
+    paddingVertical: 2,
+  },
+  livePhone: {
+    flex: 1,
+    fontSize: 17,
+    fontWeight: '500',
+    color: Colors.textSecondary,
+    letterSpacing: 0.3,
+  },
+  callIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: Colors.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  contactHint: {
+    fontSize: 13,
+    color: Colors.textMuted,
+  },
+  trackButton: {
+    marginTop: 4,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: Colors.primary,
+    borderRadius: Radius.pill,
+    paddingVertical: 13,
+  },
+  trackButtonText: {
+    color: Colors.white,
+    fontWeight: '700',
+    fontSize: 15,
+  },
+  resolveLink: {
+    alignItems: 'center',
+    paddingVertical: 4,
+  },
+  resolveLinkText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: Colors.textMuted,
+  },
   activeAlertBox: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -327,17 +597,46 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.redLight,
     borderRadius: Radius.md,
     padding: Spacing.md,
+    borderWidth: 1.5,
+    borderColor: '#F5C6C0',
+  },
+  activeAlertBoxHelper: {
+    backgroundColor: Colors.tealLight,
+    borderColor: Colors.primary,
+  },
+  activeAlertCopy: {
+    flex: 1,
+    gap: 4,
   },
   activeAlertText: {
-    flex: 1,
     fontSize: 13,
     fontWeight: '600',
     color: Colors.red,
   },
-  clearAlertText: {
-    fontSize: 13,
+  activeAlertTextHelper: {
+    color: Colors.primaryDark,
+  },
+  activeAlertSub: {
+    fontSize: 12,
+    lineHeight: 16,
+    color: Colors.textSecondary,
+  },
+  resolveButton: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.red,
+    borderRadius: Radius.pill,
+    paddingVertical: 14,
+    borderWidth: 1.5,
+    borderColor: '#8E2419',
+  },
+  resolveDisabled: {
+    opacity: 0.55,
+  },
+  resolveButtonText: {
+    color: Colors.white,
     fontWeight: '800',
-    color: Colors.primary,
+    fontSize: 14,
   },
   emergencyLabel: {
     marginTop: Spacing.xs,
@@ -359,12 +658,17 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
     borderRadius: Radius.md,
     backgroundColor: Colors.white,
-    borderWidth: 1,
+    borderWidth: 1.5,
     borderColor: '#F5C6C0',
+    shadowColor: '#1A1A1A',
+    shadowOpacity: 0.08,
+    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 2,
   },
   emergencyChipPrimary: {
     backgroundColor: Colors.red,
-    borderColor: Colors.red,
+    borderColor: '#8E2419',
   },
   emergencyChipNumber: {
     fontSize: 16,

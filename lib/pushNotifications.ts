@@ -1,12 +1,47 @@
 import Constants from 'expo-constants';
 import * as Device from 'expo-device';
-import * as Notifications from 'expo-notifications';
 import { Platform } from 'react-native';
 
 import type { Event, EmergencyAlert } from '@/types/database';
 import { Colors } from '@/constants/theme';
 
 export type PushPlatform = 'ios' | 'android' | 'web';
+
+type NotificationsModule = typeof import('expo-notifications');
+
+let notificationsModule: NotificationsModule | null | undefined;
+
+export function pushNotificationsSupported() {
+  if (Platform.OS === 'web') return false;
+  return Constants.appOwnership !== 'expo';
+}
+
+function getNotifications(): NotificationsModule | null {
+  if (!pushNotificationsSupported()) return null;
+
+  if (notificationsModule !== undefined) {
+    return notificationsModule;
+  }
+
+  try {
+    // Lazy load — static import crashes Expo Go on Android (SDK 53+).
+    const Notifications = require('expo-notifications') as NotificationsModule;
+    Notifications.setNotificationHandler({
+      handleNotification: async () => ({
+        shouldShowAlert: true,
+        shouldPlaySound: true,
+        shouldSetBadge: false,
+        shouldShowBanner: true,
+        shouldShowList: true,
+      }),
+    });
+    notificationsModule = Notifications;
+  } catch {
+    notificationsModule = null;
+  }
+
+  return notificationsModule;
+}
 
 function formatEventWhen(startsAt: string) {
   const date = new Date(startsAt);
@@ -17,16 +52,6 @@ function formatEventWhen(startsAt: string) {
   const hour12 = hours % 12 || 12;
   return `${date.getDate()} ${months[date.getMonth()]} at ${hour12}:${minutes} ${ampm}`;
 }
-
-Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowAlert: true,
-    shouldPlaySound: true,
-    shouldSetBadge: false,
-    shouldShowBanner: true,
-    shouldShowList: true,
-  }),
-});
 
 export function getPushPlatform(): PushPlatform {
   if (Platform.OS === 'ios') return 'ios';
@@ -49,7 +74,8 @@ export function buildNewEventNotification(
 }
 
 export async function registerForPushNotificationsAsync(): Promise<string | null> {
-  if (Platform.OS === 'web') return null;
+  const Notifications = getNotifications();
+  if (!Notifications) return null;
   if (!Device.isDevice) return null;
 
   if (Platform.OS === 'android') {
@@ -95,6 +121,9 @@ export async function registerForPushNotificationsAsync(): Promise<string | null
 export async function presentLocalNewEventNotification(
   event: Pick<Event, 'id' | 'title' | 'starts_at' | 'location_label'>
 ) {
+  const Notifications = getNotifications();
+  if (!Notifications) return;
+
   const content = buildNewEventNotification(event);
   await Notifications.scheduleNotificationAsync({
     content: {
@@ -122,6 +151,9 @@ export function buildEmergencyNotification(alert: Pick<EmergencyAlert, 'id' | 'c
 export async function presentLocalEmergencyNotification(
   alert: Pick<EmergencyAlert, 'id' | 'citizen_name' | 'location_label'>
 ) {
+  const Notifications = getNotifications();
+  if (!Notifications) return;
+
   const content = buildEmergencyNotification(alert);
   await Notifications.scheduleNotificationAsync({
     content: {
@@ -134,4 +166,80 @@ export async function presentLocalEmergencyNotification(
     },
     trigger: null,
   });
+}
+
+export function buildHelpOnWayNotification(input: {
+  alertId: string;
+  responderName: string;
+}) {
+  return {
+    title: 'Help is on the way',
+    body: `${input.responderName} saw your SOS and is heading to you.`,
+    data: {
+      type: 'emergency_help_on_way',
+      alertId: input.alertId,
+      screen: 'sos',
+    },
+  };
+}
+
+export async function presentLocalHelpOnWayNotification(input: {
+  alertId: string;
+  responderName: string;
+}) {
+  const Notifications = getNotifications();
+  if (!Notifications) return;
+
+  const content = buildHelpOnWayNotification(input);
+  await Notifications.scheduleNotificationAsync({
+    content: {
+      title: content.title,
+      body: content.body,
+      data: content.data,
+      sound: 'default',
+      priority: Notifications.AndroidNotificationPriority.HIGH,
+      ...(Platform.OS === 'android' ? { channelId: 'emergency' } : {}),
+    },
+    trigger: null,
+  });
+}
+
+export async function sendExpoPushMessages(
+  messages: Array<{
+    to: string;
+    title: string;
+    body: string;
+    data?: Record<string, string>;
+    sound?: 'default';
+    channelId?: string;
+    priority?: 'default' | 'normal' | 'high';
+  }>
+) {
+  if (!messages.length) return { sent: 0 };
+
+  const response = await fetch('https://exp.host/--/api/v2/push/send', {
+    method: 'POST',
+    headers: {
+      Accept: 'application/json',
+      'Accept-encoding': 'gzip, deflate',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(messages),
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Expo push failed: ${text}`);
+  }
+
+  return response.json();
+}
+
+export function addNotificationResponseListener(
+  listener: (response: import('expo-notifications').NotificationResponse) => void
+) {
+  const Notifications = getNotifications();
+  if (!Notifications) return { remove: () => undefined };
+
+  return Notifications.addNotificationResponseReceivedListener(listener);
 }

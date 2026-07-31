@@ -1,10 +1,11 @@
 import * as MailComposer from 'expo-mail-composer';
-import { Alert, Linking, Platform } from 'react-native';
+import { Linking, Platform } from 'react-native';
 
 import { brand } from '@/constants/data';
 import { isValidEmail, type DepartmentRoute } from '@/constants/departments';
 import { formatCoords, mapsUrl } from '@/lib/location';
 import type { Report } from '@/types/database';
+import { townAlert } from '@/context/TownAlertContext';
 
 function buildReportEmailBody(report: Report, departmentName: string) {
   const reporter = report.author_name ?? report.reporter_name ?? 'Citizen';
@@ -90,11 +91,11 @@ export function confirmForwardReport(
   onConfirm: () => void
 ) {
   if (!isValidEmail(route.email)) {
-    Alert.alert('Email required', 'Enter the authority email address before sending this report.');
+    townAlert('Email required', 'Enter the authority email address before sending this report.');
     return;
   }
 
-  Alert.alert(
+  townAlert(
     'Send to authority?',
     `Forward this report to ${route.department} at ${route.email}. Location and photo details will be included.`,
     [

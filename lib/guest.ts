@@ -1,6 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-import { user as seedUser } from '@/constants/data';
+import { DEMO_VOLUNTEER_NAME, isLegacyVolunteerName, normalizeVolunteerName } from '@/lib/volunteerName';
+import { hoursFromDrives } from '@/lib/volunteerHours';
 import type { UpdateProfileInput } from '@/types/database';
 
 const GUEST_ID_KEY = '@town_therapy_guest_id';
@@ -8,6 +9,7 @@ const GUEST_PROFILE_KEY = '@town_therapy_guest_profile';
 
 export type GuestProfile = {
   full_name: string;
+  bio: string;
   interests: string;
   skills: string;
   availability: string;
@@ -19,10 +21,11 @@ export type GuestProfile = {
 };
 
 const defaultGuestProfile = (): GuestProfile => ({
-  full_name: 'Volunteer',
-  interests: seedUser.interests,
-  skills: seedUser.skills,
-  availability: seedUser.availability,
+  full_name: '',
+  bio: '',
+  interests: '',
+  skills: '',
+  availability: '',
   tagline: 'Making Hazaribagh better, one step at a time.',
   registered: false,
   reports_submitted: 0,
@@ -46,12 +49,34 @@ export async function getGuestProfile(): Promise<GuestProfile> {
     await AsyncStorage.setItem(GUEST_PROFILE_KEY, JSON.stringify(profile));
     return profile;
   }
-  return { ...defaultGuestProfile(), ...JSON.parse(raw) };
+
+  const profile = { ...defaultGuestProfile(), ...JSON.parse(raw) } as GuestProfile;
+
+  // Clear demo default name for guests who never registered (was prefilled as "Gautam").
+  if (
+    !profile.registered &&
+    (isLegacyVolunteerName(profile.full_name) ||
+      profile.full_name.trim().toLowerCase() === DEMO_VOLUNTEER_NAME.toLowerCase())
+  ) {
+    profile.full_name = '';
+    await AsyncStorage.setItem(GUEST_PROFILE_KEY, JSON.stringify(profile));
+    return profile;
+  }
+
+  if (isLegacyVolunteerName(profile.full_name)) {
+    profile.full_name = '';
+    await AsyncStorage.setItem(GUEST_PROFILE_KEY, JSON.stringify(profile));
+  }
+  return profile;
 }
 
 export async function updateGuestProfile(input: UpdateProfileInput & { full_name?: string }) {
   const profile = await getGuestProfile();
-  const updated = { ...profile, ...input };
+  const updated = {
+    ...profile,
+    ...input,
+    full_name: input.full_name ? normalizeVolunteerName(input.full_name) : profile.full_name,
+  };
   await AsyncStorage.setItem(GUEST_PROFILE_KEY, JSON.stringify(updated));
   return updated;
 }
@@ -59,6 +84,9 @@ export async function updateGuestProfile(input: UpdateProfileInput & { full_name
 export async function incrementGuestStat(field: keyof Pick<GuestProfile, 'reports_submitted' | 'events_joined'>) {
   const profile = await getGuestProfile();
   profile[field] += 1;
+  if (field === 'events_joined') {
+    profile.hours_volunteered = hoursFromDrives(profile.events_joined);
+  }
   await AsyncStorage.setItem(GUEST_PROFILE_KEY, JSON.stringify(profile));
   return profile;
 }
@@ -66,6 +94,7 @@ export async function incrementGuestStat(field: keyof Pick<GuestProfile, 'report
 export async function decrementGuestStat(field: 'events_joined') {
   const profile = await getGuestProfile();
   profile[field] = Math.max(0, profile[field] - 1);
+  profile.hours_volunteered = hoursFromDrives(profile.events_joined);
   await AsyncStorage.setItem(GUEST_PROFILE_KEY, JSON.stringify(profile));
   return profile;
 }

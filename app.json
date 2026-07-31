@@ -28,6 +28,7 @@
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
       "backgroundColor": "#2D4F4F",
+      "softwareKeyboardLayoutMode": "resize",
       "splash": {
         "backgroundColor": "#2D4F4F"
       },
@@ -49,7 +50,7 @@
       [
         "expo-location",
         {
-          "locationAlwaysAndWhenInUsePermission": "Town Therapy uses your location to geotag civic reports so the town can respond."
+          "locationAlwaysAndWhenInUsePermission": "Town Therapy uses your location to geotag civic reports, alert nearby volunteers, and share live distance when someone is coming to help."
         }
       ],
       [
@@ -69,7 +70,14 @@
         }
       ],
       "expo-mail-composer",
-      "@react-native-community/datetimepicker"
+      "@react-native-community/datetimepicker",
+      [
+        "expo-media-library",
+        {
+          "photosPermission": "Town Therapy saves your volunteer ID card to your photo library.",
+          "savePhotosPermission": "Town Therapy saves your volunteer ID card to your photo library."
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true

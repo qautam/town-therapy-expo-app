@@ -1,4 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { InteractionManager } from 'react-native';
 
 import { api } from '@/lib/api';
 import type { Profile } from '@/types/database';
@@ -15,7 +16,8 @@ const AdminAuthContext = createContext<AdminAuthContextValue | null>(null);
 
 export function AdminAuthProvider({ children }: { children: ReactNode }) {
   const [admin, setAdmin] = useState<Profile | null>(null);
-  const [loading, setLoading] = useState(true);
+  // Don't block first paint — admin session is rare for volunteers
+  const [loading, setLoading] = useState(false);
 
   const refresh = useCallback(async () => {
     const session = await api.getAdminSession();
@@ -23,7 +25,11 @@ export function AdminAuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
-    refresh().finally(() => setLoading(false));
+    const task = InteractionManager.runAfterInteractions(() => {
+      setLoading(true);
+      refresh().finally(() => setLoading(false));
+    });
+    return () => task.cancel();
   }, [refresh]);
 
   const signIn = useCallback(async (email: string, password: string) => {

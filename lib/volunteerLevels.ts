@@ -31,12 +31,12 @@ export type VolunteerLevel = {
  * Level ladder based on drives/events completed.
  * Keep in sync with supabase/volunteer_levels seed data.
  *
- * Supporter: 0–3 drives
- * Contributor: 4–6 drives
- * Guardian: 7–10 drives
- * Champion: 11–14 drives
- * Elite: 15–19 drives
- * Legend: 20+ drives
+ * Supporter (Seed): 0–3 drives
+ * Contributor (Sapling): 4–10 drives
+ * Guardian (Small tree): 11–20 drives
+ * Champion (Young tree): 21–30 drives
+ * Elite (Big one): 31–40 drives
+ * Legend (Mighty tree): 41+ drives
  */
 export const VOLUNTEER_LEVELS: VolunteerLevel[] = [
   {
@@ -47,57 +47,57 @@ export const VOLUNTEER_LEVELS: VolunteerLevel[] = [
     maxEvents: 3,
     color: '#6B6B6B',
     bgColor: '#F0EDE6',
-    description: '1–3 drives completed. Every town hero starts here.',
+    description: '0–3 drives completed. Every town hero starts here.',
   },
   {
     id: 'contributor',
     name: 'Contributor',
     rankOrder: 2,
     minEvents: 4,
-    maxEvents: 6,
+    maxEvents: 10,
     color: '#2E86AB',
     bgColor: '#E5F2F8',
-    description: '4–7 drives completed. You’re showing up for Hazaribagh.',
+    description: '4–10 drives completed. You’re showing up for Hazaribagh.',
   },
   {
     id: 'guardian',
     name: 'Guardian',
     rankOrder: 3,
-    minEvents: 7,
-    maxEvents: 10,
+    minEvents: 11,
+    maxEvents: 20,
     color: '#2D4F4F',
     bgColor: '#E8EFEF',
-    description: '7–11 drives completed. A steady force for the town.',
+    description: '11–20 drives completed. A steady force for the town.',
   },
   {
     id: 'champion',
     name: 'Champion',
     rankOrder: 4,
-    minEvents: 11,
-    maxEvents: 14,
+    minEvents: 21,
+    maxEvents: 30,
     color: '#B8860B',
     bgColor: '#FDF6E3',
-    description: '11–15 drives completed. Leading by example.',
+    description: '21–30 drives completed. Leading by example.',
   },
   {
     id: 'elite',
     name: 'Elite',
     rankOrder: 5,
-    minEvents: 15,
-    maxEvents: 19,
+    minEvents: 31,
+    maxEvents: 40,
     color: '#7B4397',
     bgColor: '#F3E8F8',
-    description: '15–20 drives completed. One of the most active changemakers.',
+    description: '31–40 drives completed. One of the most active changemakers.',
   },
   {
     id: 'legend',
     name: 'Legend',
     rankOrder: 6,
-    minEvents: 20,
+    minEvents: 41,
     maxEvents: null,
     color: '#C0392B',
     bgColor: '#FCEAE8',
-    description: '20+ drives completed. Hazaribagh legend.',
+    description: '41+ drives completed. Hazaribagh legend.',
   },
 ];
 
@@ -151,6 +151,79 @@ export function formatLevelRange(level: VolunteerLevel) {
   if (level.maxEvents == null) return `${level.minEvents}+ drives`;
   if (level.minEvents === 0) return `0–${level.maxEvents} drives`;
   return `${level.minEvents}–${level.maxEvents} drives`;
+}
+
+export type VolunteerGrowthStageId =
+  | 'seed'
+  | 'sapling'
+  | 'small_tree'
+  | 'young_tree'
+  | 'mature_tree'
+  | 'mighty_tree';
+
+export type VolunteerGrowthStage = {
+  id: VolunteerGrowthStageId;
+  label: string;
+  color: string;
+  bgColor: string;
+};
+
+/** Visual growth next to a volunteer’s name as they climb the ladder. */
+export const VOLUNTEER_GROWTH_STAGES: Record<VolunteerLevelId, VolunteerGrowthStage> = {
+  supporter: {
+    id: 'seed',
+    label: 'Seed',
+    color: '#C8C8D4',
+    bgColor: '#E8EFEF',
+  },
+  contributor: {
+    id: 'sapling',
+    label: 'Sapling',
+    color: '#C8C8D4',
+    bgColor: '#E8EFEF',
+  },
+  guardian: {
+    id: 'small_tree',
+    label: 'Small tree',
+    color: '#43A047',
+    bgColor: '#E8F5E9',
+  },
+  champion: {
+    id: 'young_tree',
+    label: 'Young tree',
+    color: '#2E7D32',
+    bgColor: '#E3F2E6',
+  },
+  elite: {
+    id: 'mature_tree',
+    label: 'Big one',
+    color: '#1B5E20',
+    bgColor: '#DCEFE0',
+  },
+  legend: {
+    id: 'mighty_tree',
+    label: 'Mighty tree',
+    color: '#14532D',
+    bgColor: '#D4EBDA',
+  },
+};
+
+export function getVolunteerGrowthStage(levelId: VolunteerLevelId) {
+  return VOLUNTEER_GROWTH_STAGES[levelId] ?? VOLUNTEER_GROWTH_STAGES.supporter;
+}
+
+/** Compact emoji for journey strips & identity chips */
+export const VOLUNTEER_GROWTH_EMOJI: Record<VolunteerLevelId, string> = {
+  supporter: '🌱',
+  contributor: '🌿',
+  guardian: '🌳',
+  champion: '🌲',
+  elite: '🌴',
+  legend: '🌟',
+};
+
+export function getVolunteerGrowthEmoji(levelId: VolunteerLevelId) {
+  return VOLUNTEER_GROWTH_EMOJI[levelId] ?? '🌱';
 }
 
 /** @deprecated levels are based on drives only */

@@ -2,7 +2,6 @@ import { useRouter } from 'expo-router';
 import { useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -12,25 +11,43 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { KeyboardAwareScrollView } from '@/components/KeyboardAwareScrollView';
 import { useVolunteer } from '@/context/VolunteerContext';
+import { useKeyboardVerticalOffset } from '@/hooks/useKeyboardVerticalOffset';
+import { useTaskDraft } from '@/hooks/useTaskDraft';
 import { communityFilters } from '@/constants/data';
 import { api } from '@/lib/api';
 import type { CommunityPost } from '@/types/database';
 import { Colors, Radius, Spacing } from '@/constants/theme';
+import { townAlert } from '@/context/TownAlertContext';
 
 const postCategories = communityFilters.filter((c) => c !== 'All') as CommunityPost['category'][];
 
+type PostDraft = {
+  category: CommunityPost['category'];
+  title: string;
+  description: string;
+};
+
+const EMPTY_POST_DRAFT: PostDraft = {
+  category: 'Success',
+  title: '',
+  description: '',
+};
+
 export default function NewPostScreen() {
   const router = useRouter();
+  const keyboardOffset = useKeyboardVerticalOffset();
   const { guestId } = useVolunteer();
-  const [category, setCategory] = useState<CommunityPost['category']>('Success');
-  const [title, setTitle] = useState('');
-  const [description, setDescription] = useState('');
   const [loading, setLoading] = useState(false);
+  const { value: draft, setValue: setDraft, clearDraft } = useTaskDraft('post-new', EMPTY_POST_DRAFT, {
+    pause: loading,
+  });
+  const { category, title, description } = draft;
 
   const submit = async () => {
     if (!guestId || !title.trim()) {
-      Alert.alert('Missing details', 'Add a title for your story.');
+      townAlert('Missing details', 'Add a title for your story.');
       return;
     }
 
@@ -41,10 +58,11 @@ export default function NewPostScreen() {
         title: title.trim(),
         description: description.trim(),
       });
-      Alert.alert('Story shared', 'Thanks for celebrating community wins.');
+      await clearDraft();
+      townAlert('Story shared', 'Thanks for celebrating community wins.');
       router.back();
     } catch (error) {
-      Alert.alert('Could not post', error instanceof Error ? error.message : 'Try again.');
+      townAlert('Could not post', error instanceof Error ? error.message : 'Try again.');
     } finally {
       setLoading(false);
     }
@@ -52,13 +70,15 @@ export default function NewPostScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={['bottom']}>
-      <ScrollView contentContainerStyle={styles.content}>
+      <KeyboardAwareScrollView
+        contentContainerStyle={styles.content}
+        keyboardVerticalOffset={keyboardOffset}>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chips}>
           {postCategories.map((item) => (
             <Pressable
               key={item}
               style={[styles.chip, category === item && styles.chipActive]}
-              onPress={() => setCategory(item)}>
+              onPress={() => setDraft((current) => ({ ...current, category: item }))}>
               <Text style={[styles.chipText, category === item && styles.chipTextActive]}>{item}</Text>
             </Pressable>
           ))}
@@ -69,7 +89,7 @@ export default function NewPostScreen() {
           placeholder="Headline"
           placeholderTextColor={Colors.textMuted}
           value={title}
-          onChangeText={setTitle}
+          onChangeText={(value) => setDraft((current) => ({ ...current, title: value }))}
         />
         <TextInput
           style={[styles.input, styles.textArea]}
@@ -77,7 +97,7 @@ export default function NewPostScreen() {
           placeholderTextColor={Colors.textMuted}
           multiline
           value={description}
-          onChangeText={setDescription}
+          onChangeText={(value) => setDraft((current) => ({ ...current, description: value }))}
         />
 
         <Pressable style={styles.submit} onPress={submit} disabled={loading}>
@@ -87,7 +107,7 @@ export default function NewPostScreen() {
             <Text style={styles.submitText}>Share story</Text>
           )}
         </Pressable>
-      </ScrollView>
+      </KeyboardAwareScrollView>
     </SafeAreaView>
   );
 }

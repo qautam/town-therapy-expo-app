@@ -1,39 +1,100 @@
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import { useRouter } from 'expo-router';
-import { useCallback, useEffect, useState } from 'react';
-import { ImageBackground, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useFocusEffect, useRouter } from 'expo-router';
+import { useCallback, useRef, useState, type ReactNode } from 'react';
+import {
+  ImageBackground,
+  Pressable,
+  RefreshControl,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
+import Animated, {
+  interpolateColor,
+  useAnimatedStyle,
+  useSharedValue,
+  withSpring,
+} from 'react-native-reanimated';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { TownTherapyLogo } from '@/components/TownTherapyLogo';
-import { brand, communityWins, heroImage, user } from '@/constants/data';
+import { CitizenStickyNotes } from '@/components/CitizenStickyNotes';
+import { HomeBrandHeader } from '@/components/HomeBrandHeader';
+import { HomeSection } from '@/components/HomeSection';
+import { KeyboardAwareScrollView } from '@/components/KeyboardAwareScrollView';
+import { SustainabilityTipsTicker } from '@/components/SustainabilityTipsTicker';
+import { TownNewsBanner } from '@/components/TownNewsBanner';
 import { Colors, Radius, Spacing } from '@/constants/theme';
-import { SectionHeader } from '@/components/SectionHeader';
 import { useVolunteer } from '@/context/VolunteerContext';
 import { api, formatEventDateParts } from '@/lib/api';
-import type { DashboardStats, Event } from '@/types/database';
+import { cacheGetOrFetch, cacheInvalidate } from '@/lib/queryCache';
+import { buildTownNewsItems } from '@/lib/townNews';
+import type { StickyNote } from '@/lib/stickyNotes';
+import type { DashboardStats, Event, TownNewsItem } from '@/types/database';
 
-function StatCard({ value, label }: { value: number; label: string }) {
-  return (
-    <View style={styles.statCard}>
-      <Text style={styles.statValue}>{value}</Text>
-      <Text style={styles.statLabel}>{label}</Text>
-    </View>
-  );
-}
+const HOME_TTL_MS = 90_000;
 
-function QuickReportButton({ onPress }: { onPress: () => void }) {
+function ActionTile({
+  icon,
+  title,
+  subtitle,
+  onPress,
+}: {
+  icon: keyof typeof Ionicons.glyphMap;
+  title: string;
+  subtitle?: string;
+  onPress: () => void;
+}) {
+  const press = useSharedValue(0);
+  const [pressed, setPressedState] = useState(false);
+
+  const tileStyle = useAnimatedStyle(() => ({
+    backgroundColor: interpolateColor(press.value, [0, 1], [Colors.white, Colors.primary]),
+    borderColor: interpolateColor(press.value, [0, 1], [Colors.border, Colors.primaryDark]),
+    transform: [{ scale: 1 - press.value * 0.045 }],
+  }));
+
+  const iconWrapStyle = useAnimatedStyle(() => ({
+    backgroundColor: interpolateColor(
+      press.value,
+      [0, 1],
+      [Colors.greenLight, 'rgba(255,255,255,0.18)']
+    ),
+  }));
+
+  const titleStyle = useAnimatedStyle(() => ({
+    color: interpolateColor(press.value, [0, 1], [Colors.text, Colors.white]),
+  }));
+
+  const subtitleStyle = useAnimatedStyle(() => ({
+    color: interpolateColor(press.value, [0, 1], [Colors.textSecondary, 'rgba(255,255,255,0.82)']),
+  }));
+
+  const setPressed = (active: boolean) => {
+    setPressedState(active);
+    press.value = withSpring(active ? 1 : 0, {
+      damping: 16,
+      stiffness: 280,
+      mass: 0.7,
+    });
+  };
+
   return (
-    <Pressable style={styles.quickReport} onPress={onPress}>
-      <View style={styles.quickIcon}>
-        <Ionicons name="add" size={22} color={Colors.primary} />
-      </View>
-      <View style={styles.quickText}>
-        <Text style={styles.quickTitle}>Quick Report</Text>
-        <Text style={styles.quickSubtitle}>
-          Report civic issues with geotagging — public safety & SOS at the bottom.
-        </Text>
-      </View>
-      <Ionicons name="chevron-forward" size={20} color={Colors.white} />
+    <Pressable
+      onPress={onPress}
+      onPressIn={() => setPressed(true)}
+      onPressOut={() => setPressed(false)}
+      style={styles.actionPressable}>
+      <Animated.View style={[styles.actionTile, tileStyle]}>
+        <Animated.View style={[styles.actionIcon, iconWrapStyle]}>
+          <Ionicons name={icon} size={18} color={pressed ? Colors.white : Colors.primary} />
+        </Animated.View>
+        <Animated.Text style={[styles.actionTitle, titleStyle]}>{title}</Animated.Text>
+        {subtitle ? (
+          <Animated.Text style={[styles.actionSub, subtitleStyle]}>{subtitle}</Animated.Text>
+        ) : null}
+      </Animated.View>
     </Pressable>
   );
 }
@@ -42,21 +103,33 @@ function EventCarouselCard({ event, onPress }: { event: Event; onPress: () => vo
   const { date, month, time } = formatEventDateParts(event.starts_at);
 
   return (
-    <Pressable style={styles.eventCard} onPress={onPress}>
+    <Pressable
+      style={({ pressed }) => [styles.eventCard, pressed && styles.pressed]}
+      onPress={onPress}>
       <ImageBackground
         source={{ uri: event.image_url ?? undefined }}
         style={styles.eventImage}
         imageStyle={styles.eventImageInner}>
-        <LinearGradient colors={['transparent', 'rgba(0,0,0,0.75)']} style={styles.eventGradient}>
+        <LinearGradient colors={['transparent', 'rgba(0,0,0,0.72)']} style={styles.eventGradient}>
           <View style={styles.dateBadge}>
             <Text style={styles.dateDay}>{date}</Text>
             <Text style={styles.dateMonth}>{month}</Text>
           </View>
           <View style={styles.eventInfo}>
-            <Text style={styles.eventTitle}>{event.title}</Text>
-            <Text style={styles.eventMeta}>
+            <Text style={styles.eventTitle} numberOfLines={2}>
+              {event.title}
+            </Text>
+            <Text style={styles.eventMeta} numberOfLines={1}>
               {time} · {event.location_label}
             </Text>
+            <View style={styles.eventRsvpRow}>
+              <Ionicons name="people" size={13} color="rgba(255,255,255,0.92)" />
+              <Text style={styles.eventRsvpText}>
+                {event.attendee_count === 0
+                  ? 'No RSVPs yet'
+                  : `${event.attendee_count} RSVPed`}
+              </Text>
+            </View>
           </View>
         </LinearGradient>
       </ImageBackground>
@@ -64,246 +137,343 @@ function EventCarouselCard({ event, onPress }: { event: Event; onPress: () => vo
   );
 }
 
-function CommunityWinCard({ win }: { win: (typeof communityWins)[0] }) {
-  const iconName = win.icon === 'sparkles' ? 'sparkles' : 'trophy';
-  const iconColor = win.icon === 'sparkles' ? Colors.orange : Colors.red;
-
-  return (
-    <View style={styles.winCard}>
-      <View style={[styles.winIcon, { backgroundColor: Colors.orangeLight }]}>
-        <Ionicons name={iconName} size={18} color={iconColor} />
-      </View>
-      <View style={styles.winContent}>
-        <Text style={styles.winTitle}>{win.title}</Text>
-        <Text style={styles.winDescription} numberOfLines={2}>
-          {win.description}
-        </Text>
-        <Text style={styles.winMeta}>
-          {win.author} · {win.likes} likes
-        </Text>
-      </View>
-    </View>
-  );
+function Sheet({ children }: { children: ReactNode }) {
+  return <View style={styles.sheet}>{children}</View>;
 }
 
 export default function HomeScreen() {
   const router = useRouter();
-  const { guestId, refresh: refreshVolunteer } = useVolunteer();
+  const { guestId, profile, newsletter, refresh: refreshVolunteer } = useVolunteer();
   const [upcomingEvents, setUpcomingEvents] = useState<Event[]>([]);
-  const [dashboardStats, setDashboardStats] = useState<DashboardStats>(user.dashboard);
+  const [dashboardStats, setDashboardStats] = useState<DashboardStats>({
+    drives_completed: 0,
+    issues_reported: 0,
+    issues_resolved: 0,
+  });
+  const [stickyNotes, setStickyNotes] = useState<StickyNote[]>([]);
+  const [townNewsItems, setTownNewsItems] = useState<TownNewsItem[]>([]);
   const [refreshing, setRefreshing] = useState(false);
 
-  const loadHomeData = useCallback(async () => {
-    const [events, stats] = await Promise.all([
-      api.listEvents(guestId, false),
-      api.getDashboardStats(),
-    ]);
-    setUpcomingEvents(events.slice(0, 5));
-    setDashboardStats(stats);
-  }, [guestId]);
+  const isRegistered = Boolean(profile?.registered);
+  const isOnBreak = Boolean(newsletter) && !isRegistered;
 
-  useEffect(() => {
-    loadHomeData();
-  }, [loadHomeData]);
+  const loadHomeData = useCallback(
+    async (force = false) => {
+      const cacheKey = `home:${guestId ?? 'anon'}`;
+      const payload = await cacheGetOrFetch(
+        cacheKey,
+        HOME_TTL_MS,
+        async () => {
+          const [cloud, notes] = await Promise.all([
+            api.getHomeCloudSnapshot(guestId),
+            api.listStickyNotes().catch((error) => {
+              console.warn('Chalkboard notes unavailable:', error);
+              return [] as StickyNote[];
+            }),
+          ]);
+          return {
+            events: cloud.events,
+            stats: cloud.stats,
+            notes,
+            newsItems: buildTownNewsItems(cloud.news),
+          };
+        },
+        {
+          force,
+          onCacheHit: (cached) => {
+            setUpcomingEvents(cached.events);
+            setDashboardStats(cached.stats);
+            setStickyNotes(cached.notes);
+            setTownNewsItems(cached.newsItems);
+          },
+        }
+      );
+      setUpcomingEvents(payload.events);
+      setDashboardStats(payload.stats);
+      setStickyNotes(payload.notes);
+      setTownNewsItems(payload.newsItems);
+    },
+    [guestId]
+  );
+
+  const didLoad = useRef(false);
+  useFocusEffect(
+    useCallback(() => {
+      // Skip until guest id is ready; then use cache unless forced refresh
+      if (!guestId && didLoad.current) return;
+      didLoad.current = true;
+      void loadHomeData(false);
+    }, [guestId, loadHomeData])
+  );
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     try {
-      await Promise.all([loadHomeData(), refreshVolunteer()]);
+      cacheInvalidate('home:');
+      cacheInvalidate('events:');
+      cacheInvalidate('drive-checkins:');
+      // Soft volunteer refresh (no recount) — keep pull-to-refresh snappy
+      await Promise.all([loadHomeData(true), refreshVolunteer()]);
     } finally {
       setRefreshing(false);
     }
   }, [loadHomeData, refreshVolunteer]);
 
   return (
-    <ScrollView
-      style={styles.container}
-      contentContainerStyle={styles.content}
-      showsVerticalScrollIndicator={false}
-      refreshControl={
-        <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={Colors.primary} />
-      }>
-      <ImageBackground source={{ uri: heroImage }} style={styles.hero}>
-        <LinearGradient
-          colors={['rgba(45, 79, 79, 0.55)', 'rgba(36, 63, 63, 0.9)']}
-          style={styles.heroGradient}>
-          <View style={styles.heroBrandRow}>
-            <TownTherapyLogo size={56} withShadow />
-            <View style={styles.heroBrandText}>
-              <Text style={styles.brandName}>{brand.name}</Text>
-              <Text style={styles.brandTagline}>{brand.tagline}</Text>
-            </View>
+    <SafeAreaView style={styles.safe} edges={['top']}>
+      <KeyboardAwareScrollView
+        style={styles.container}
+        contentContainerStyle={styles.content}
+        showsVerticalScrollIndicator={false}
+        decelerationRate="normal"
+        scrollEventThrottle={16}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={Colors.primary} />
+        }>
+        {/* Civic hub header — photo hero + live updates (always show photos) */}
+        <TownNewsBanner
+          items={townNewsItems}
+          onPressItem={(item) => {
+            if (item.route) router.push(item.route as never);
+          }}
+          top={<HomeBrandHeader />}
+          bottom={<Text style={styles.headline}>What can I do for my town today?</Text>}
+        />
+
+        <View style={styles.body}>
+          {/* 1. Quick actions first — task-based IA */}
+          <View style={styles.actions}>
+            <ActionTile
+              icon="megaphone"
+              title="Report"
+              subtitle="Flag an issue"
+              onPress={() => router.push('/(tabs)/reports')}
+            />
+            <ActionTile
+              icon="calendar-outline"
+              title="Events"
+              subtitle="What's on"
+              onPress={() => router.push('/(tabs)/events')}
+            />
+            <ActionTile
+              icon={
+                isRegistered ? 'person-outline' : isOnBreak ? 'leaf-outline' : 'hand-left-outline'
+              }
+              title={isRegistered ? 'You' : isOnBreak ? 'Resume' : 'Join'}
+              subtitle={isRegistered ? 'Your profile' : isOnBreak ? 'Come back' : 'Volunteer'}
+              onPress={() =>
+                router.push(isRegistered ? '/(tabs)/profile' : isOnBreak ? '/(tabs)/profile' : '/newsletter')
+              }
+            />
           </View>
-          <Text style={styles.greeting}>Hi {user.greeting} 👋</Text>
-          <Text style={styles.heroTitle}>{brand.headline}</Text>
-          <Text style={styles.motto}>{brand.motto}</Text>
-          <View style={styles.statsRow}>
-            <StatCard value={dashboardStats.issues} label="Issues" />
-            <StatCard value={dashboardStats.resolved} label="Resolved" />
-            <StatCard value={dashboardStats.neighbors} label="Neighbors" />
-          </View>
-        </LinearGradient>
-      </ImageBackground>
 
-      <View style={styles.body}>
-        <QuickReportButton onPress={() => router.push('/report/new')} />
+          {/* 2. Snapshot metrics */}
+          <HomeSection title="Town at a glance">
+            <Sheet>
+              <View style={styles.metrics}>
+                <View style={styles.metric}>
+                  <Text style={styles.metricValue}>{dashboardStats.drives_completed}</Text>
+                  <Text style={styles.metricLabel} numberOfLines={2}>
+                    Drives completed
+                  </Text>
+                </View>
+                <View style={styles.metricDivider} />
+                <View style={styles.metric}>
+                  <Text style={styles.metricValue}>{dashboardStats.issues_reported}</Text>
+                  <Text style={styles.metricLabel} numberOfLines={2}>
+                    Issues reported
+                  </Text>
+                </View>
+                <View style={styles.metricDivider} />
+                <View style={styles.metric}>
+                  <Text style={styles.metricValue}>{dashboardStats.issues_resolved}</Text>
+                  <Text style={styles.metricLabel} numberOfLines={2}>
+                    Issues resolved
+                  </Text>
+                </View>
+              </View>
+            </Sheet>
+          </HomeSection>
 
-        <SectionHeader title="Upcoming events" />
-        {upcomingEvents.length === 0 ? (
-          <Text style={styles.eventsEmpty}>No upcoming events yet. Pull down to refresh.</Text>
-        ) : (
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.eventsScroll}>
-            {upcomingEvents.map((event) => (
-              <EventCarouselCard
-                key={event.id}
-                event={event}
-                onPress={() => router.push(`/event/${event.id}`)}
-              />
-            ))}
-          </ScrollView>
-        )}
+          {/* 3. Highlights — events */}
+          <HomeSection
+            title="Upcoming"
+            actionLabel="See all"
+            onAction={() => router.push('/(tabs)/events')}>
+            {upcomingEvents.length === 0 ? (
+              <Sheet>
+                <Text style={styles.emptyText}>No upcoming events yet. Pull to refresh.</Text>
+              </Sheet>
+            ) : (
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                decelerationRate="fast"
+                snapToInterval={262}
+                disableIntervalMomentum
+                contentContainerStyle={styles.eventsScroll}>
+                {upcomingEvents.map((event) => (
+                  <EventCarouselCard
+                    key={event.id}
+                    event={event}
+                    onPress={() => router.push(`/event/${event.id}`)}
+                  />
+                ))}
+              </ScrollView>
+            )}
+          </HomeSection>
 
-        <SectionHeader title="Community wins" />
-        {communityWins.map((win) => (
-          <CommunityWinCard key={win.id} win={win} />
-        ))}
-      </View>
-    </ScrollView>
+          {/* 4. Community board */}
+          <HomeSection title="Town chalkboard">
+            <CitizenStickyNotes guestId={guestId} notes={stickyNotes} onUpdated={setStickyNotes} />
+          </HomeSection>
+
+          {/* 5. Rotating green tips */}
+          <SustainabilityTipsTicker />
+
+          {!isRegistered && !isOnBreak ? (
+            <Pressable
+              style={({ pressed }) => [styles.volunteerBanner, pressed && styles.pressed]}
+              onPress={() => router.push('/newsletter')}>
+              <LinearGradient
+                colors={[Colors.primaryLight, Colors.primary]}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 1 }}
+                style={styles.volunteerGradient}>
+                <Text style={styles.volunteerTitle}>Become a volunteer</Text>
+                <Text style={styles.volunteerSubtitle}>
+                  Join cleanups and drives that help Hazaribagh heal.
+                </Text>
+                <Text style={styles.volunteerCta}>Register →</Text>
+              </LinearGradient>
+            </Pressable>
+          ) : null}
+        </View>
+      </KeyboardAwareScrollView>
+    </SafeAreaView>
   );
 }
 
+const CARD_RADIUS = Radius.lg;
+
 const styles = StyleSheet.create({
+  safe: {
+    flex: 1,
+    backgroundColor: Colors.greenLight,
+  },
   container: {
     flex: 1,
-    backgroundColor: Colors.background,
+    backgroundColor: Colors.greenLight,
   },
   content: {
-    paddingBottom: Spacing.xl,
+    paddingBottom: Spacing.xl + 8,
   },
-  hero: {
-    minHeight: 320,
-  },
-  heroGradient: {
-    flex: 1,
-    padding: Spacing.lg,
-    justifyContent: 'flex-end',
-  },
-  heroBrandRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.md,
-    marginBottom: Spacing.lg,
-  },
-  heroBrandText: {
-    flex: 1,
-  },
-  brandName: {
+  headline: {
     color: Colors.white,
-    fontSize: 22,
+    fontSize: 26,
     fontWeight: '800',
-    letterSpacing: 0.4,
-  },
-  brandTagline: {
-    color: 'rgba(255,255,255,0.88)',
-    fontSize: 13,
-    marginTop: 2,
-  },
-  greeting: {
-    color: Colors.white,
-    fontSize: 16,
-    marginBottom: Spacing.sm,
-  },
-  heroTitle: {
-    color: Colors.white,
-    fontSize: 28,
-    fontWeight: '700',
-    lineHeight: 34,
-  },
-  motto: {
-    color: 'rgba(255,255,255,0.85)',
-    fontSize: 12,
-    fontWeight: '700',
-    letterSpacing: 1,
-    marginTop: Spacing.sm,
-  },
-  statsRow: {
-    flexDirection: 'row',
-    gap: Spacing.sm,
-    marginTop: Spacing.lg,
-  },
-  statCard: {
-    flex: 1,
-    backgroundColor: 'rgba(255,255,255,0.18)',
-    borderRadius: Radius.md,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.25)',
-    paddingVertical: Spacing.md,
-    alignItems: 'center',
-  },
-  statValue: {
-    color: Colors.white,
-    fontSize: 22,
-    fontWeight: '700',
-  },
-  statLabel: {
-    color: 'rgba(255,255,255,0.9)',
-    fontSize: 12,
-    marginTop: 2,
+    lineHeight: 32,
+    letterSpacing: -0.4,
   },
   body: {
-    padding: Spacing.lg,
+    marginTop: -Spacing.sm,
+    paddingHorizontal: Spacing.lg,
+    paddingTop: Spacing.lg,
+    gap: Spacing.lg,
   },
-  quickReport: {
+  pressed: {
+    opacity: 0.88,
+    transform: [{ scale: 0.985 }],
+  },
+  actions: {
     flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: Colors.primary,
-    borderRadius: Radius.xl,
-    padding: Spacing.md,
-    marginBottom: Spacing.lg,
-    gap: Spacing.md,
+    gap: Spacing.sm,
   },
-  quickIcon: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: Colors.white,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  quickText: {
+  actionPressable: {
     flex: 1,
   },
-  quickTitle: {
-    color: Colors.white,
-    fontSize: 16,
-    fontWeight: '700',
+  actionTile: {
+    flex: 1,
+    borderRadius: CARD_RADIUS,
+    padding: Spacing.md,
+    gap: 4,
+    minHeight: 108,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    backgroundColor: Colors.white,
   },
-  quickSubtitle: {
-    color: 'rgba(255,255,255,0.85)',
-    fontSize: 12,
-    marginTop: 2,
-    lineHeight: 16,
+  actionIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.greenLight,
+    marginBottom: 4,
+  },
+  actionTitle: {
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  actionSub: {
+    fontSize: 11,
+    fontWeight: '600',
+    lineHeight: 15,
+  },
+  sheet: {
+    backgroundColor: Colors.white,
+    borderRadius: CARD_RADIUS,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    padding: Spacing.md,
+  },
+  metrics: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  metric: {
+    flex: 1,
+    alignItems: 'center',
+  },
+  metricDivider: {
+    width: StyleSheet.hairlineWidth,
+    height: 28,
+    backgroundColor: Colors.border,
+  },
+  metricValue: {
+    fontSize: 20,
+    fontWeight: '800',
+    color: Colors.primary,
+  },
+  metricLabel: {
+    marginTop: 4,
+    fontSize: 10,
+    color: Colors.textSecondary,
+    fontWeight: '600',
+    textAlign: 'center',
+    lineHeight: 13,
+    paddingHorizontal: 2,
+  },
+  emptyText: {
+    color: Colors.textSecondary,
+    fontSize: 14,
+    lineHeight: 20,
   },
   eventsScroll: {
     gap: Spacing.md,
-    paddingBottom: Spacing.lg,
-  },
-  eventsEmpty: {
-    color: Colors.textSecondary,
-    fontSize: 14,
-    marginBottom: Spacing.lg,
+    paddingRight: Spacing.lg,
   },
   eventCard: {
-    width: 280,
-    height: 180,
-    borderRadius: Radius.lg,
+    width: 246,
+    height: 152,
+    borderRadius: CARD_RADIUS,
     overflow: 'hidden',
   },
   eventImage: {
     flex: 1,
   },
   eventImageInner: {
-    borderRadius: Radius.lg,
+    borderRadius: CARD_RADIUS,
   },
   eventGradient: {
     flex: 1,
@@ -334,45 +504,46 @@ const styles = StyleSheet.create({
   },
   eventTitle: {
     color: Colors.white,
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: '700',
   },
   eventMeta: {
     color: 'rgba(255,255,255,0.85)',
     fontSize: 12,
   },
-  winCard: {
+  eventRsvpRow: {
     flexDirection: 'row',
-    backgroundColor: Colors.card,
-    borderRadius: Radius.lg,
-    padding: Spacing.md,
-    marginBottom: Spacing.md,
-    gap: Spacing.md,
-  },
-  winIcon: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
     alignItems: 'center',
-    justifyContent: 'center',
+    gap: 5,
+    marginTop: 2,
   },
-  winContent: {
-    flex: 1,
-  },
-  winTitle: {
-    fontSize: 15,
+  eventRsvpText: {
+    color: 'rgba(255,255,255,0.92)',
+    fontSize: 12,
     fontWeight: '700',
-    color: Colors.text,
   },
-  winDescription: {
+  volunteerBanner: {
+    borderRadius: Radius.xl,
+    overflow: 'hidden',
+  },
+  volunteerGradient: {
+    padding: Spacing.lg,
+    gap: 6,
+  },
+  volunteerTitle: {
+    color: Colors.white,
+    fontSize: 18,
+    fontWeight: '800',
+  },
+  volunteerSubtitle: {
+    color: 'rgba(255,255,255,0.92)',
     fontSize: 13,
-    color: Colors.textSecondary,
-    marginTop: 4,
     lineHeight: 18,
   },
-  winMeta: {
-    fontSize: 12,
-    color: Colors.textMuted,
-    marginTop: 8,
+  volunteerCta: {
+    marginTop: Spacing.sm,
+    color: Colors.white,
+    fontSize: 14,
+    fontWeight: '800',
   },
 });

@@ -1,4 +1,3 @@
-import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useEffect } from 'react';
 import { Modal, Pressable, StyleSheet, Text, View } from 'react-native';
@@ -13,8 +12,8 @@ import Animated, {
   withTiming,
 } from 'react-native-reanimated';
 
-import { LEVEL_ICONS } from '@/lib/levelUp';
-import { formatLevelRange, type VolunteerLevel } from '@/lib/volunteerLevels';
+import { VolunteerGrowthTree } from '@/components/VolunteerGrowthTree';
+import { formatLevelRange, getVolunteerGrowthStage, type VolunteerLevel } from '@/lib/volunteerLevels';
 import { Colors, Radius, Spacing } from '@/constants/theme';
 
 type Props = {
@@ -112,7 +111,7 @@ export function LevelUpModal({ visible, level, onDismiss }: Props) {
 
   if (!level) return null;
 
-  const icon = LEVEL_ICONS[level.name] ?? 'ribbon';
+  const growth = getVolunteerGrowthStage(level.id);
 
   return (
     <Modal visible={visible} transparent animationType="none" onRequestClose={onDismiss}>
@@ -121,7 +120,7 @@ export function LevelUpModal({ visible, level, onDismiss }: Props) {
 
         <Animated.View style={[styles.card, contentStyle]}>
           <Text style={styles.kicker}>LEVEL UP</Text>
-          <Text style={styles.title}>You advanced!</Text>
+          <Text style={styles.title}>You grew!</Text>
 
           <View style={styles.badgeWrap}>
             <Animated.View style={[styles.glow, glowStyle, { backgroundColor: level.color }]} />
@@ -131,11 +130,11 @@ export function LevelUpModal({ visible, level, onDismiss }: Props) {
                 start={{ x: 0, y: 0 }}
                 end={{ x: 1, y: 1 }}
                 style={[styles.badge, { borderColor: level.color }]}>
-                <View style={[styles.iconRing, { backgroundColor: level.color }]}>
-                  <Ionicons name={icon} size={34} color={Colors.white} />
-                </View>
+                <VolunteerGrowthTree levelId={level.id} size="lg" bare />
                 <Text style={[styles.levelName, { color: level.color }]}>{level.name}</Text>
-                <Text style={styles.levelRange}>{formatLevelRange(level)}</Text>
+                <Text style={styles.levelRange}>
+                  {growth.label} · {formatLevelRange(level)}
+                </Text>
               </LinearGradient>
             </Animated.View>
 
@@ -144,7 +143,9 @@ export function LevelUpModal({ visible, level, onDismiss }: Props) {
             ))}
           </View>
 
-          <Text style={styles.description}>{level.description}</Text>
+          <Text style={styles.description}>
+            Your seed has grown into a {growth.label.toLowerCase()}. {level.description}
+          </Text>
 
           <Pressable style={[styles.button, { backgroundColor: level.color }]} onPress={onDismiss}>
             <Text style={styles.buttonText}>Keep showing up for Hazaribagh</Text>
@@ -213,14 +214,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     padding: Spacing.md,
-  },
-  iconRing: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 10,
+    gap: 4,
   },
   levelName: {
     fontSize: 22,

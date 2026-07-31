@@ -3,9 +3,7 @@ import { useRouter } from 'expo-router';
 import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   Pressable,
-  ScrollView,
   StyleSheet,
   Switch,
   Text,
@@ -14,12 +12,34 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { useVolunteer } from '@/context/VolunteerContext';
+import { KeyboardAwareScrollView } from '@/components/KeyboardAwareScrollView';
 import { TownTherapyLogo } from '@/components/TownTherapyLogo';
+import { useKeyboardVerticalOffset } from '@/hooks/useKeyboardVerticalOffset';
+import { useTaskDraft } from '@/hooks/useTaskDraft';
+import { WelcomeMemberModal } from '@/components/WelcomeMemberModal';
+import { useVolunteer } from '@/context/VolunteerContext';
 import { brand } from '@/constants/data';
 import { Colors, Radius, Spacing } from '@/constants/theme';
+import { normalizeVolunteerName } from '@/lib/volunteerName';
+import { townAlert } from '@/context/TownAlertContext';
 
 type Mode = 'signup' | 'signin' | 'manage';
+
+type NewsletterDraft = {
+  mode: Mode;
+  fullName: string;
+  email: string;
+  eventUpdates: boolean;
+  townNewsletter: boolean;
+};
+
+const EMPTY_NEWSLETTER_DRAFT: NewsletterDraft = {
+  mode: 'signup',
+  fullName: '',
+  email: '',
+  eventUpdates: true,
+  townNewsletter: true,
+};
 
 export default function NewsletterScreen() {
   const router = useRouter();
@@ -30,49 +50,57 @@ export default function NewsletterScreen() {
     updateNewsletter,
     newsletterUnsubscribe,
   } = useVolunteer();
-
-  const [mode, setMode] = useState<Mode>(newsletter ? 'manage' : 'signup');
-  const [fullName, setFullName] = useState(newsletter?.full_name ?? '');
-  const [email, setEmail] = useState(newsletter?.email ?? '');
-  const [eventUpdates, setEventUpdates] = useState(newsletter?.event_updates ?? true);
-  const [townNewsletter, setTownNewsletter] = useState(newsletter?.town_newsletter ?? true);
+  const keyboardOffset = useKeyboardVerticalOffset();
   const [loading, setLoading] = useState(false);
+  const [showWelcome, setShowWelcome] = useState(false);
+  const [welcomeName, setWelcomeName] = useState('');
+  const { value: draft, setValue: setDraft, clearDraft } = useTaskDraft(
+    'newsletter-signup',
+    EMPTY_NEWSLETTER_DRAFT,
+    { pause: loading }
+  );
+  const { mode, fullName, email, eventUpdates, townNewsletter } = draft;
 
   useEffect(() => {
-    if (newsletter) {
-      setMode('manage');
-      setFullName(newsletter.full_name);
-      setEmail(newsletter.email);
-      setEventUpdates(newsletter.event_updates);
-      setTownNewsletter(newsletter.town_newsletter);
-    }
-  }, [newsletter]);
+    if (!newsletter) return;
+    setDraft({
+      mode: 'manage',
+      fullName: newsletter.full_name,
+      email: newsletter.email,
+      eventUpdates: newsletter.event_updates,
+      townNewsletter: newsletter.town_newsletter,
+    });
+  }, [newsletter, setDraft]);
 
   const handleSignUp = async () => {
     if (!fullName.trim() || !email.trim()) {
-      Alert.alert('Missing details', 'Enter your name and email.');
+      townAlert('Missing details', 'Enter your name and email.');
       return;
     }
     if (!eventUpdates && !townNewsletter) {
-      Alert.alert('Choose at least one', 'Select event updates or the town newsletter.');
+      townAlert('Choose at least one', 'Select event updates or the town newsletter.');
       return;
     }
 
     setLoading(true);
     try {
+      const name = normalizeVolunteerName(fullName);
+      if (!name) {
+        townAlert('Missing details', 'Enter your name and email.');
+        return;
+      }
       await newsletterSignUp({
-        full_name: fullName.trim(),
+        full_name: name,
         email: email.trim(),
         event_updates: eventUpdates,
         town_newsletter: townNewsletter,
       });
-      Alert.alert(
-        'Profile created!',
-        'You start as a Supporter. Complete drives to rise: Contributor (4+), Guardian (7+), Champion (11+), Elite (15+), Legend (20+).'
-      );
-      setMode('manage');
+      setWelcomeName(name);
+      setDraft((current) => ({ ...current, mode: 'manage', fullName: name }));
+      await clearDraft();
+      setShowWelcome(true);
     } catch (error) {
-      Alert.alert('Sign up failed', error instanceof Error ? error.message : 'Try again.');
+      townAlert('Sign up failed', error instanceof Error ? error.message : 'Try again.');
     } finally {
       setLoading(false);
     }
@@ -80,17 +108,18 @@ export default function NewsletterScreen() {
 
   const handleSignIn = async () => {
     if (!email.trim()) {
-      Alert.alert('Missing email', 'Enter the email you subscribed with.');
+      townAlert('Missing email', 'Enter the email you subscribed with.');
       return;
     }
 
     setLoading(true);
     try {
       await newsletterSignIn(email.trim());
-      Alert.alert('Welcome back', 'Your email preferences are synced on this device.');
-      setMode('manage');
+      await clearDraft();
+      townAlert('Welcome back', 'Your email preferences are synced on this device.');
+      setDraft((current) => ({ ...current, mode: 'manage' }));
     } catch (error) {
-      Alert.alert('Sign in failed', error instanceof Error ? error.message : 'Try again.');
+      townAlert('Sign in failed', error instanceof Error ? error.message : 'Try again.');
     } finally {
       setLoading(false);
     }
@@ -98,27 +127,27 @@ export default function NewsletterScreen() {
 
   const handleSavePreferences = async () => {
     if (!eventUpdates && !townNewsletter) {
-      Alert.alert('Choose at least one', 'Select event updates or the town newsletter.');
+      townAlert('Choose at least one', 'Select event updates or the town newsletter.');
       return;
     }
 
     setLoading(true);
     try {
       await updateNewsletter({
-        full_name: fullName.trim(),
+        full_name: normalizeVolunteerName(fullName),
         event_updates: eventUpdates,
         town_newsletter: townNewsletter,
       });
-      Alert.alert('Saved', 'Your email preferences were updated.');
+      townAlert('Saved', 'Your email preferences were updated.');
     } catch (error) {
-      Alert.alert('Update failed', error instanceof Error ? error.message : 'Try again.');
+      townAlert('Update failed', error instanceof Error ? error.message : 'Try again.');
     } finally {
       setLoading(false);
     }
   };
 
   const handleUnsubscribe = () => {
-    Alert.alert(
+    townAlert(
       'Unsubscribe?',
       'You will stop receiving event and newsletter emails.',
       [
@@ -130,12 +159,11 @@ export default function NewsletterScreen() {
             setLoading(true);
             try {
               await newsletterUnsubscribe();
-              setMode('signup');
-              setEmail('');
-              setFullName('');
-              Alert.alert('Unsubscribed', 'You can sign up again anytime.');
+              await clearDraft();
+              setDraft(EMPTY_NEWSLETTER_DRAFT);
+              townAlert('Unsubscribed', 'You can sign up again anytime.');
             } catch (error) {
-              Alert.alert('Error', error instanceof Error ? error.message : 'Try again.');
+              townAlert('Error', error instanceof Error ? error.message : 'Try again.');
             } finally {
               setLoading(false);
             }
@@ -147,13 +175,15 @@ export default function NewsletterScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={['bottom']}>
-      <ScrollView contentContainerStyle={styles.content}>
+      <KeyboardAwareScrollView
+        contentContainerStyle={styles.content}
+        keyboardVerticalOffset={keyboardOffset}>
         <View style={styles.hero}>
           <TownTherapyLogo size={72} withShadow />
-          <Text style={styles.title}>Stay in the loop</Text>
+          <Text style={styles.title}>Become a volunteer</Text>
           <Text style={styles.subtitle}>
-            Sign up to create your volunteer profile, get email updates, and start at Supporter level.
-            No password needed to use the app.
+            Sign up to create your volunteer profile and start at Supporter level. No password needed
+            to use the app.
           </Text>
         </View>
 
@@ -161,12 +191,12 @@ export default function NewsletterScreen() {
           <View style={styles.tabs}>
             <Pressable
               style={[styles.tab, mode === 'signup' && styles.tabActive]}
-              onPress={() => setMode('signup')}>
+              onPress={() => setDraft((current) => ({ ...current, mode: 'signup' }))}>
               <Text style={[styles.tabText, mode === 'signup' && styles.tabTextActive]}>Sign up</Text>
             </Pressable>
             <Pressable
               style={[styles.tab, mode === 'signin' && styles.tabActive]}
-              onPress={() => setMode('signin')}>
+              onPress={() => setDraft((current) => ({ ...current, mode: 'signin' }))}>
               <Text style={[styles.tabText, mode === 'signin' && styles.tabTextActive]}>Sign in</Text>
             </Pressable>
           </View>
@@ -181,7 +211,7 @@ export default function NewsletterScreen() {
               placeholder="Email you subscribed with"
               placeholderTextColor={Colors.textMuted}
               value={email}
-              onChangeText={setEmail}
+              onChangeText={(value) => setDraft((current) => ({ ...current, email: value }))}
             />
             <Pressable style={styles.primaryButton} onPress={handleSignIn} disabled={loading}>
               {loading ? (
@@ -197,10 +227,11 @@ export default function NewsletterScreen() {
           <>
             <TextInput
               style={styles.input}
-              placeholder="Your name"
+              placeholder="Your full name"
               placeholderTextColor={Colors.textMuted}
               value={fullName}
-              onChangeText={setFullName}
+              onChangeText={(value) => setDraft((current) => ({ ...current, fullName: value }))}
+              autoCapitalize="words"
             />
             <TextInput
               style={styles.input}
@@ -209,7 +240,7 @@ export default function NewsletterScreen() {
               placeholder="Email address"
               placeholderTextColor={Colors.textMuted}
               value={email}
-              onChangeText={setEmail}
+              onChangeText={(value) => setDraft((current) => ({ ...current, email: value }))}
               editable={mode === 'signup'}
             />
 
@@ -223,7 +254,9 @@ export default function NewsletterScreen() {
                 </View>
                 <Switch
                   value={eventUpdates}
-                  onValueChange={setEventUpdates}
+                  onValueChange={(value) =>
+                    setDraft((current) => ({ ...current, eventUpdates: value }))
+                  }
                   trackColor={{ true: Colors.primary, false: Colors.border }}
                 />
               </View>
@@ -235,7 +268,9 @@ export default function NewsletterScreen() {
                 </View>
                 <Switch
                   value={townNewsletter}
-                  onValueChange={setTownNewsletter}
+                  onValueChange={(value) =>
+                    setDraft((current) => ({ ...current, townNewsletter: value }))
+                  }
                   trackColor={{ true: Colors.primary, false: Colors.border }}
                 />
               </View>
@@ -249,7 +284,7 @@ export default function NewsletterScreen() {
                 <ActivityIndicator color={Colors.white} />
               ) : (
                 <Text style={styles.primaryButtonText}>
-                  {mode === 'manage' ? 'Save preferences' : 'Sign up for emails'}
+                  {mode === 'manage' ? 'Save preferences' : 'Sign up'}
                 </Text>
               )}
             </Pressable>
@@ -263,9 +298,18 @@ export default function NewsletterScreen() {
         ) : null}
 
         <Pressable style={styles.skip} onPress={() => router.back()}>
-          <Text style={styles.skipText}>Continue without email updates</Text>
+          <Text style={styles.skipText}>Continue without signing up</Text>
         </Pressable>
-      </ScrollView>
+      </KeyboardAwareScrollView>
+
+      <WelcomeMemberModal
+        visible={showWelcome}
+        memberName={welcomeName}
+        onDismiss={() => {
+          setShowWelcome(false);
+          router.back();
+        }}
+      />
     </SafeAreaView>
   );
 }
@@ -280,8 +324,8 @@ const styles = StyleSheet.create({
     gap: Spacing.sm,
     alignItems: 'center',
   },
-  title: { fontSize: 22, fontWeight: '700', color: Colors.text },
-  subtitle: { fontSize: 14, color: Colors.textSecondary, lineHeight: 20 },
+  title: { fontSize: 22, fontWeight: '700', color: Colors.white },
+  subtitle: { fontSize: 14, color: 'rgba(255,255,255,0.75)', lineHeight: 20 },
   tabs: {
     flexDirection: 'row',
     backgroundColor: Colors.card,
@@ -335,5 +379,5 @@ const styles = StyleSheet.create({
   },
   secondaryButtonText: { color: Colors.red, fontWeight: '700' },
   skip: { alignItems: 'center', paddingVertical: Spacing.sm },
-  skipText: { color: Colors.textMuted, fontSize: 14 },
+  skipText: { color: 'rgba(255,255,255,0.7)', fontSize: 14 },
 });

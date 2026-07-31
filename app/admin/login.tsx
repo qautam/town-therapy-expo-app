@@ -2,7 +2,6 @@ import { useRouter } from 'expo-router';
 import { useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   Pressable,
   StyleSheet,
   Text,
@@ -11,21 +10,26 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { KeyboardAwareScrollView } from '@/components/KeyboardAwareScrollView';
 import { useAdminAuth } from '@/context/AdminAuthContext';
 import { TownTherapyLogo } from '@/components/TownTherapyLogo';
 import { brand } from '@/constants/data';
 import { Colors, Radius, Spacing } from '@/constants/theme';
+import { isSupabaseConfigured } from '@/lib/config';
+import { townAlert } from '@/context/TownAlertContext';
 
 export default function AdminLoginScreen() {
   const router = useRouter();
   const { signIn } = useAdminAuth();
-  const [email, setEmail] = useState('admin@towntherapy.app');
+  const [email, setEmail] = useState(
+    isSupabaseConfigured ? 'admin@towntherapy.club' : 'admin@towntherapy.app'
+  );
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
 
   const handleSignIn = async () => {
     if (!email.trim() || !password.trim()) {
-      Alert.alert('Missing details', 'Enter admin email and password.');
+      townAlert('Missing details', 'Enter admin email and password.');
       return;
     }
 
@@ -34,7 +38,7 @@ export default function AdminLoginScreen() {
       await signIn(email.trim(), password);
       router.replace('/admin');
     } catch (error) {
-      Alert.alert('Login failed', error instanceof Error ? error.message : 'Try again.');
+      townAlert('Login failed', error instanceof Error ? error.message : 'Try again.');
     } finally {
       setLoading(false);
     }
@@ -42,7 +46,7 @@ export default function AdminLoginScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={['bottom']}>
-      <View style={styles.content}>
+      <KeyboardAwareScrollView contentContainerStyle={styles.content}>
         <View style={styles.iconWrap}>
           <TownTherapyLogo size={64} />
         </View>
@@ -78,10 +82,11 @@ export default function AdminLoginScreen() {
         </Pressable>
 
         <Text style={styles.hint}>
-          Demo local password: towntherapy{'\n'}
-          {brand.name} · {brand.location}
+          {isSupabaseConfigured
+            ? 'Cloud admin: admin@towntherapy.club\nPassword: towntherapy'
+            : `Demo local password: towntherapy\n${brand.name} · ${brand.location}`}
         </Text>
-      </View>
+      </KeyboardAwareScrollView>
     </SafeAreaView>
   );
 }
@@ -106,12 +111,12 @@ const styles = StyleSheet.create({
   title: {
     fontSize: 24,
     fontWeight: '700',
-    color: Colors.text,
+    color: Colors.white,
   },
   subtitle: {
     marginTop: Spacing.sm,
     fontSize: 14,
-    color: Colors.textSecondary,
+    color: 'rgba(255,255,255,0.75)',
     lineHeight: 20,
     marginBottom: Spacing.lg,
   },

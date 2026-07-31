@@ -15,8 +15,8 @@ import { TownTherapyLogo } from '@/components/TownTherapyLogo';
 import { brand } from '@/constants/data';
 import { Colors, Spacing } from '@/constants/theme';
 
-const TOTAL_MS = 2000;
-const FADE_OUT_MS = 380;
+const TOTAL_MS = 700;
+const FADE_OUT_MS = 220;
 const FADE_OUT_START_MS = TOTAL_MS - FADE_OUT_MS;
 
 type Props = {

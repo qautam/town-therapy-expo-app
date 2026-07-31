@@ -5,6 +5,7 @@ import {
   type VolunteerLevel,
   type VolunteerLevelId,
 } from '@/lib/volunteerLevels';
+import { hoursFromDrives } from '@/lib/volunteerHours';
 import type { NewsletterSubscription, VolunteerProfileRecord } from '@/types/database';
 
 export function enrichVolunteerProfile(
@@ -46,9 +47,12 @@ function getNextLevel(current: VolunteerLevel) {
 export function applyLocalLevelFields(
   subscription: NewsletterSubscription
 ): NewsletterSubscription {
-  const eventsAttended = subscription.events_attended ?? 0;
+  const eventsAttended = Math.max(0, Number(subscription.events_attended ?? 0) || 0);
   return {
     ...subscription,
+    events_attended: eventsAttended,
+    reports_flagged: Math.max(0, Number(subscription.reports_flagged ?? 0) || 0),
     volunteer_level_id: resolveVolunteerLevelId(eventsAttended),
+    hours_volunteered: hoursFromDrives(eventsAttended),
   };
 }

@@ -4,12 +4,10 @@ import { useRouter } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   Image,
   Linking,
   Pressable,
   RefreshControl,
-  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -18,18 +16,43 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { EventDateTimePicker } from '@/components/EventDateTimePicker';
+import { KeyboardAwareScrollView } from '@/components/KeyboardAwareScrollView';
 import { useAdminAuth } from '@/context/AdminAuthContext';
 import { DEPARTMENT_DEFINITIONS, isValidEmail, resolveDepartmentDefinition } from '@/constants/departments';
+import { VOLUNTEER_SKILLS } from '@/constants/volunteerProfile';
 import { api, formatEventDateParts } from '@/lib/api';
+import { isSupabaseConfigured } from '@/lib/config';
+import { hoursFromDrives } from '@/lib/volunteerHours';
 import { buildContactDrafts, resolveRouteForCategory } from '@/lib/departmentContacts';
 import { confirmForwardReport, forwardReportToDepartment } from '@/lib/forwardReport';
 import { formatCoords, mapsUrl } from '@/lib/location';
-import type { EmergencyAlert, Event, Report, UpdateEventInput } from '@/types/database';
+import {
+  composeVolunteerNewsletter,
+  confirmVolunteerNewsletter,
+  filterVolunteerContacts,
+  type VolunteerMailContact,
+  type VolunteerNewsletterAudience,
+} from '@/lib/volunteerNewsletter';
+import type { EmergencyAlert, Event, Report, UpdateEventInput, VolunteerDirectoryEntry } from '@/types/database';
 import { Colors, Radius, Spacing } from '@/constants/theme';
+import { OptionPickerModal } from '@/components/OptionPickerModal';
+import {
+  STICKY_NOTE_TTL_DAYS,
+  formatStickyNoteRemaining,
+  type StickyNote,
+} from '@/lib/stickyNotes';
+import { townAlert } from '@/context/TownAlertContext';
 
 const statusOptions: Report['status'][] = ['open', 'in_progress', 'resolved'];
 
-type AdminSection = 'reports' | 'authorities' | 'events' | 'emergencies';
+type AdminSection =
+  | 'reports'
+  | 'authorities'
+  | 'events'
+  | 'volunteers'
+  | 'emergencies'
+  | 'newsletter'
+  | 'chalkboard';
 
 const ADMIN_TABS: {
   id: AdminSection;
@@ -38,9 +61,34 @@ const ADMIN_TABS: {
   icon: keyof typeof Ionicons.glyphMap;
 }[] = [
   { id: 'reports', label: 'Reports', subtitle: 'Citizen issues', icon: 'document-text-outline' },
-  { id: 'authorities', label: 'Authorities', subtitle: 'Department emails', icon: 'mail-outline' },
+  { id: 'authorities', label: 'Authorities', subtitle: 'Department emails', icon: 'business-outline' },
   { id: 'events', label: 'Events', subtitle: 'Create & manage', icon: 'calendar-outline' },
+  { id: 'chalkboard', label: 'Chalkboard', subtitle: 'Pin town notes', icon: 'easel-outline' },
+  { id: 'volunteers', label: 'Volunteers', subtitle: 'Find by skill', icon: 'people-outline' },
+  { id: 'newsletter', label: 'Newsletter', subtitle: 'Email volunteers', icon: 'mail-outline' },
   { id: 'emergencies', label: 'SOS Alerts', subtitle: 'Live emergencies', icon: 'warning-outline' },
+];
+
+const NEWSLETTER_AUDIENCES: {
+  id: VolunteerNewsletterAudience;
+  label: string;
+  hint: string;
+}[] = [
+  {
+    id: 'all',
+    label: 'Everyone who signed up',
+    hint: 'All volunteers who registered at any point, including those on a break',
+  },
+  {
+    id: 'town_newsletter',
+    label: 'Email updates on',
+    hint: 'Only people who opted into town newsletter emails',
+  },
+  {
+    id: 'event_updates',
+    label: 'Event updates on',
+    hint: 'Only people who opted into future event alerts',
+  },
 ];
 
 function defaultEventStart() {
@@ -56,6 +104,18 @@ export default function AdminPanelScreen() {
   const [reports, setReports] = useState<Report[]>([]);
   const [events, setEvents] = useState<Event[]>([]);
   const [emergencies, setEmergencies] = useState<EmergencyAlert[]>([]);
+  const [stickyNotes, setStickyNotes] = useState<StickyNote[]>([]);
+  const [pinningNoteId, setPinningNoteId] = useState<string | null>(null);
+  const [deletingNoteId, setDeletingNoteId] = useState<string | null>(null);
+  const [volunteerContacts, setVolunteerContacts] = useState<VolunteerMailContact[]>([]);
+  const [skillFilter, setSkillFilter] = useState<string>('');
+  const [showSkillPicker, setShowSkillPicker] = useState(false);
+  const [skillMatches, setSkillMatches] = useState<VolunteerDirectoryEntry[]>([]);
+  const [newsletterAudience, setNewsletterAudience] =
+    useState<VolunteerNewsletterAudience>('all');
+  const [newsletterSubject, setNewsletterSubject] = useState('Town Therapy update');
+  const [newsletterMessage, setNewsletterMessage] = useState('');
+  const [sendingNewsletter, setSendingNewsletter] = useState(false);
   const [contactDrafts, setContactDrafts] = useState<Record<string, string>>({});
   const [savingContactId, setSavingContactId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -85,6 +145,11 @@ export default function AdminPanelScreen() {
     setEmergencies(data.filter((alert) => alert.status !== 'resolved').slice(0, 20));
   }, []);
 
+  const loadStickyNotes = useCallback(async () => {
+    const data = await api.listStickyNotes();
+    setStickyNotes(data);
+  }, []);
+
   const loadEvents = useCallback(async () => {
     const data = await api.listEvents(null);
     setEvents(data);
@@ -95,9 +160,42 @@ export default function AdminPanelScreen() {
     setContactDrafts(buildContactDrafts(contacts));
   }, []);
 
+  const loadVolunteerContacts = useCallback(async () => {
+    const contacts = await api.listVolunteerContacts();
+    setVolunteerContacts(contacts);
+  }, []);
+
+  const loadSkillMatches = useCallback(async (skill: string) => {
+    if (!skill) {
+      setSkillMatches([]);
+      return;
+    }
+    const matches = await api.listVolunteersBySkill(skill);
+    setSkillMatches(matches);
+  }, []);
+
   const loadAll = useCallback(async () => {
-    await Promise.all([loadReports(), loadEvents(), loadEmergencies(), loadDepartmentContacts()]);
-  }, [loadReports, loadEvents, loadEmergencies, loadDepartmentContacts]);
+    await Promise.all([
+      loadReports(),
+      loadEvents(),
+      loadEmergencies(),
+      loadStickyNotes(),
+      loadDepartmentContacts(),
+      loadVolunteerContacts(),
+    ]);
+    if (skillFilter) {
+      await loadSkillMatches(skillFilter);
+    }
+  }, [
+    loadReports,
+    loadEvents,
+    loadEmergencies,
+    loadStickyNotes,
+    loadDepartmentContacts,
+    loadVolunteerContacts,
+    loadSkillMatches,
+    skillFilter,
+  ]);
 
   useEffect(() => {
     if (authLoading) return;
@@ -119,12 +217,12 @@ export default function AdminPanelScreen() {
       await api.updateReportStatus(reportId, status);
       await loadReports();
     } catch (error) {
-      Alert.alert('Update failed', error instanceof Error ? error.message : 'Try again.');
+      townAlert('Update failed', error instanceof Error ? error.message : 'Try again.');
     }
   };
 
   const deleteReport = (report: Report) => {
-    Alert.alert(
+    townAlert(
       'Delete report?',
       `Remove "${report.title}" permanently? Use this for spam or duplicate reports.`,
       [
@@ -138,7 +236,7 @@ export default function AdminPanelScreen() {
               await api.deleteReport(report.id);
               await loadReports();
             } catch (error) {
-              Alert.alert('Delete failed', error instanceof Error ? error.message : 'Try again.');
+              townAlert('Delete failed', error instanceof Error ? error.message : 'Try again.');
             } finally {
               setDeletingReportId(null);
             }
@@ -155,16 +253,16 @@ export default function AdminPanelScreen() {
   const saveDepartmentContact = async (departmentId: string) => {
     const email = contactDrafts[departmentId]?.trim() ?? '';
     if (!isValidEmail(email)) {
-      Alert.alert('Invalid email', 'Enter a valid authority email address.');
+      townAlert('Invalid email', 'Enter a valid authority email address.');
       return;
     }
 
     setSavingContactId(departmentId);
     try {
       await api.saveDepartmentContact(departmentId, email);
-      Alert.alert('Saved', 'Authority email updated.');
+      townAlert('Saved', 'Authority email updated.');
     } catch (error) {
-      Alert.alert('Save failed', error instanceof Error ? error.message : 'Try again.');
+      townAlert('Save failed', error instanceof Error ? error.message : 'Try again.');
     } finally {
       setSavingContactId(null);
     }
@@ -184,9 +282,9 @@ export default function AdminPanelScreen() {
 
         await api.markReportForwarded(report.id, route.email);
         await loadReports();
-        Alert.alert('Report forwarded', `Email sent to ${route.department}.`);
+        townAlert('Report forwarded', `Email sent to ${route.department}.`);
       } catch (error) {
-        Alert.alert('Could not send', error instanceof Error ? error.message : 'Try again.');
+        townAlert('Could not send', error instanceof Error ? error.message : 'Try again.');
       } finally {
         setForwardingId(null);
       }
@@ -198,8 +296,46 @@ export default function AdminPanelScreen() {
       await api.resolveEmergencyAlert(alertId);
       await loadEmergencies();
     } catch (error) {
-      Alert.alert('Update failed', error instanceof Error ? error.message : 'Try again.');
+      townAlert('Update failed', error instanceof Error ? error.message : 'Try again.');
     }
+  };
+
+  const toggleStickyPin = async (note: StickyNote) => {
+    setPinningNoteId(note.id);
+    try {
+      const next = await api.setStickyNotePinned(note.id, !note.pinned);
+      setStickyNotes(next);
+    } catch (error) {
+      townAlert(
+        'Could not update pin',
+        error instanceof Error
+          ? error.message
+          : 'Make sure you are signed in as admin and sticky-notes.sql has been applied.'
+      );
+    } finally {
+      setPinningNoteId(null);
+    }
+  };
+
+  const eraseStickyNote = (note: StickyNote) => {
+    townAlert('Erase chalkboard note?', `"${note.body.slice(0, 60)}${note.body.length > 60 ? '…' : ''}"`, [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Erase',
+        style: 'destructive',
+        onPress: async () => {
+          setDeletingNoteId(note.id);
+          try {
+            const next = await api.deleteStickyNoteAsAdmin(note.id);
+            setStickyNotes(next);
+          } catch (error) {
+            townAlert('Erase failed', error instanceof Error ? error.message : 'Try again.');
+          } finally {
+            setDeletingNoteId(null);
+          }
+        },
+      },
+    ]);
   };
 
   const resetEventForm = () => {
@@ -230,7 +366,7 @@ export default function AdminPanelScreen() {
 
   const saveEvent = async () => {
     if (!eventTitle.trim() || !eventLocation.trim()) {
-      Alert.alert('Missing details', 'Add an event title and location.');
+      townAlert('Missing details', 'Add an event title and location.');
       return;
     }
 
@@ -248,35 +384,47 @@ export default function AdminPanelScreen() {
 
       if (editingEventId) {
         await api.updateEvent(editingEventId, input);
-        Alert.alert('Event updated', 'Your changes are now live for all volunteers.');
+        townAlert(
+          'Event updated',
+          isSupabaseConfigured
+            ? 'Your changes are now live for all volunteers. Ask them to pull to refresh if they already had Events open.'
+            : 'Saved on this device only. Connect Supabase (EXPO_PUBLIC_SUPABASE_URL + ANON_KEY) so volunteers on other phones can see it.'
+        );
       } else {
         await api.createEvent(input);
-        Alert.alert(
+        townAlert(
           'Event published',
-          'Volunteers with event updates enabled will get a push notification on their device.'
+          isSupabaseConfigured
+            ? 'Volunteers with event updates enabled will get a push notification on their device.'
+            : 'Published on this device only. Without Supabase, other phones keep their own local data and will not see this event.'
         );
       }
 
       resetEventForm();
-      await loadEvents();
     } catch (error) {
-      Alert.alert(
+      townAlert(
         editingEventId ? 'Update failed' : 'Create failed',
         error instanceof Error ? error.message : 'Try again.'
       );
     } finally {
       setCreatingEvent(false);
+      // Refresh list separately so a list error doesn't look like publish failed
+      try {
+        await loadEvents();
+      } catch {
+        // ignore
+      }
     }
   };
 
   const pickEventPhoto = () => {
-    Alert.alert('Add event photo', 'Upload a cover image for this event.', [
+    townAlert('Add event photo', 'Upload a cover image for this event.', [
       {
         text: 'Take photo',
         onPress: async () => {
           const permission = await ImagePicker.requestCameraPermissionsAsync();
           if (!permission.granted) {
-            Alert.alert('Camera access needed', 'Enable camera access to photograph the event.');
+            townAlert('Camera access needed', 'Enable camera access to photograph the event.');
             return;
           }
           const result = await ImagePicker.launchCameraAsync({
@@ -295,7 +443,7 @@ export default function AdminPanelScreen() {
         onPress: async () => {
           const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
           if (!permission.granted) {
-            Alert.alert('Photos access needed', 'Enable photo library access to attach an image.');
+            townAlert('Photos access needed', 'Enable photo library access to attach an image.');
             return;
           }
           const result = await ImagePicker.launchImageLibraryAsync({
@@ -314,7 +462,7 @@ export default function AdminPanelScreen() {
   };
 
   const deleteEvent = (event: Event) => {
-    Alert.alert('Delete event?', `Remove "${event.title}" from upcoming events?`, [
+    townAlert('Delete event?', `Remove "${event.title}" from upcoming events?`, [
       { text: 'Cancel', style: 'cancel' },
       {
         text: 'Delete',
@@ -326,7 +474,7 @@ export default function AdminPanelScreen() {
             if (editingEventId === event.id) resetEventForm();
             await loadEvents();
           } catch (error) {
-            Alert.alert('Delete failed', error instanceof Error ? error.message : 'Try again.');
+            townAlert('Delete failed', error instanceof Error ? error.message : 'Try again.');
           } finally {
             setDeletingEventId(null);
           }
@@ -338,6 +486,38 @@ export default function AdminPanelScreen() {
   const handleSignOut = async () => {
     await signOut();
     router.replace('/(tabs)/profile');
+  };
+
+  const newsletterRecipientCount = filterVolunteerContacts(
+    volunteerContacts,
+    newsletterAudience
+  ).length;
+
+  const sendVolunteerNewsletter = () => {
+    const audienceLabel =
+      NEWSLETTER_AUDIENCES.find((item) => item.id === newsletterAudience)?.label ?? 'selected audience';
+
+    confirmVolunteerNewsletter(newsletterRecipientCount, audienceLabel, async () => {
+      setSendingNewsletter(true);
+      try {
+        const sent = await composeVolunteerNewsletter({
+          contacts: volunteerContacts,
+          audience: newsletterAudience,
+          subject: newsletterSubject,
+          message: newsletterMessage,
+        });
+        if (sent) {
+          townAlert(
+            'Mail opened',
+            `Your email app is ready with ${newsletterRecipientCount} volunteer${newsletterRecipientCount === 1 ? '' : 's'} in BCC.`
+          );
+        }
+      } catch (error) {
+        townAlert('Could not open mail', error instanceof Error ? error.message : 'Try again.');
+      } finally {
+        setSendingNewsletter(false);
+      }
+    });
   };
 
   if (authLoading || loading) {
@@ -363,6 +543,15 @@ export default function AdminPanelScreen() {
         </Pressable>
       </View>
 
+      {!isSupabaseConfigured ? (
+        <View style={styles.localModeBanner}>
+          <Ionicons name="cloud-offline-outline" size={18} color={Colors.orange} />
+          <Text style={styles.localModeText}>
+            Local demo mode — events and reports stay on this phone. Add Supabase keys in `.env` to sync with volunteers.
+          </Text>
+        </View>
+      ) : null}
+
       <View style={styles.menuGrid}>
         {ADMIN_TABS.map((tab) => {
           const isActive = section === tab.id;
@@ -373,7 +562,11 @@ export default function AdminPanelScreen() {
                 ? events.length
                 : tab.id === 'emergencies'
                   ? emergencies.length
-                  : null;
+                  : tab.id === 'chalkboard'
+                    ? stickyNotes.length
+                    : tab.id === 'volunteers' || tab.id === 'newsletter'
+                      ? volunteerContacts.length
+                      : null;
 
           return (
             <Pressable
@@ -411,8 +604,92 @@ export default function AdminPanelScreen() {
         </Text>
       </View>
 
-      {section === 'authorities' ? (
-        <ScrollView contentContainerStyle={styles.form}>
+      {section === 'volunteers' ? (
+        <KeyboardAwareScrollView contentContainerStyle={styles.form}>
+          <View style={styles.infoBanner}>
+            <Ionicons name="people-outline" size={18} color={Colors.primary} />
+            <Text style={styles.infoBannerText}>
+              Search volunteers by skill to find the right people for a drive or task.
+            </Text>
+          </View>
+
+          <Text style={styles.fieldLabel}>Skill</Text>
+          <Pressable style={styles.skillSelect} onPress={() => setShowSkillPicker(true)}>
+            <Text style={[styles.skillSelectText, !skillFilter && styles.skillSelectPlaceholder]}>
+              {skillFilter || 'Choose a skill'}
+            </Text>
+            <Ionicons name="chevron-down" size={18} color={Colors.textMuted} />
+          </Pressable>
+
+          {skillFilter ? (
+            <Pressable
+              style={styles.clearSkill}
+              onPress={() => {
+                setSkillFilter('');
+                setSkillMatches([]);
+              }}>
+              <Text style={styles.clearSkillText}>Clear filter</Text>
+            </Pressable>
+          ) : null}
+
+          {skillFilter ? (
+            <>
+              <Text style={styles.skillResultCount}>
+                {skillMatches.length} volunteer{skillMatches.length === 1 ? '' : 's'} with “{skillFilter}”
+              </Text>
+              {skillMatches.length === 0 ? (
+                <Text style={styles.empty}>
+                  No volunteers have chosen this skill yet. Ask them to set Skills in About you.
+                </Text>
+              ) : (
+                skillMatches.map((volunteer) => (
+                  <View key={`${volunteer.email}-${volunteer.guest_id}`} style={styles.volunteerRow}>
+                    <View style={styles.volunteerAvatar}>
+                      <Text style={styles.volunteerAvatarText}>
+                        {(volunteer.full_name || 'V').charAt(0).toUpperCase()}
+                      </Text>
+                    </View>
+                    <View style={styles.volunteerText}>
+                      <Text style={styles.volunteerName}>{volunteer.full_name || 'Volunteer'}</Text>
+                      <Text style={styles.volunteerEmail}>{volunteer.email}</Text>
+                      <Text style={styles.volunteerMeta}>
+                        {[
+                          volunteer.cause,
+                          volunteer.availability,
+                          `${volunteer.events_attended} drives completed`,
+                          `${volunteer.hours_volunteered ?? hoursFromDrives(volunteer.events_attended)}h`,
+                        ]
+                          .filter(Boolean)
+                          .join(' · ')}
+                      </Text>
+                      {volunteer.bio ? (
+                        <Text style={styles.volunteerBio} numberOfLines={2}>
+                          {volunteer.bio}
+                        </Text>
+                      ) : null}
+                    </View>
+                  </View>
+                ))
+              )}
+            </>
+          ) : (
+            <Text style={styles.empty}>Pick a skill above to see matching volunteers.</Text>
+          )}
+
+          <OptionPickerModal
+            visible={showSkillPicker}
+            title="Filter by skill"
+            options={VOLUNTEER_SKILLS}
+            value={skillFilter}
+            onSelect={(value) => {
+              setSkillFilter(value);
+              void loadSkillMatches(value);
+            }}
+            onClose={() => setShowSkillPicker(false)}
+          />
+        </KeyboardAwareScrollView>
+      ) : section === 'authorities' ? (
+        <KeyboardAwareScrollView contentContainerStyle={styles.form}>
           <View style={styles.infoBanner}>
             <Ionicons name="mail-outline" size={18} color={Colors.primary} />
             <Text style={styles.infoBannerText}>
@@ -447,9 +724,127 @@ export default function AdminPanelScreen() {
               </Pressable>
             </View>
           ))}
-        </ScrollView>
+        </KeyboardAwareScrollView>
+      ) : section === 'newsletter' ? (
+        <KeyboardAwareScrollView
+          contentContainerStyle={styles.form}
+          refreshControl={
+            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={Colors.primary} />
+          }
+          keyboardShouldPersistTaps="handled">
+          <View style={styles.infoBanner}>
+            <Ionicons name="people-outline" size={18} color={Colors.primary} />
+            <Text style={styles.infoBannerText}>
+              Email everyone who has signed up for Town Therapy — including volunteers currently on a
+              break. Messages open in your mail app with recipients in BCC.
+            </Text>
+          </View>
+
+          <View style={styles.newsletterStatCard}>
+            <Text style={styles.newsletterStatValue}>{volunteerContacts.length}</Text>
+            <Text style={styles.newsletterStatLabel}>registered volunteer emails</Text>
+            <Text style={styles.newsletterStatHint}>
+              {newsletterRecipientCount} in current audience
+            </Text>
+          </View>
+
+          <Text style={styles.fieldLabel}>Audience</Text>
+          {NEWSLETTER_AUDIENCES.map((audience) => {
+            const active = newsletterAudience === audience.id;
+            const count = filterVolunteerContacts(volunteerContacts, audience.id).length;
+            return (
+              <Pressable
+                key={audience.id}
+                style={[styles.audienceOption, active && styles.audienceOptionActive]}
+                onPress={() => setNewsletterAudience(audience.id)}>
+                <View style={styles.audienceTextWrap}>
+                  <Text style={[styles.audienceTitle, active && styles.audienceTitleActive]}>
+                    {audience.label}
+                  </Text>
+                  <Text style={[styles.audienceHint, active && styles.audienceHintActive]}>
+                    {audience.hint}
+                  </Text>
+                </View>
+                <View style={[styles.audienceCount, active && styles.audienceCountActive]}>
+                  <Text style={[styles.audienceCountText, active && styles.audienceCountTextActive]}>
+                    {count}
+                  </Text>
+                </View>
+              </Pressable>
+            );
+          })}
+
+          <Text style={styles.fieldLabel}>Subject</Text>
+          <TextInput
+            style={styles.input}
+            placeholder="Newsletter subject"
+            placeholderTextColor={Colors.textMuted}
+            value={newsletterSubject}
+            onChangeText={setNewsletterSubject}
+          />
+
+          <Text style={styles.fieldLabel}>Message</Text>
+          <TextInput
+            style={[styles.input, styles.textArea, styles.newsletterMessage]}
+            placeholder="Write your update to volunteers…"
+            placeholderTextColor={Colors.textMuted}
+            value={newsletterMessage}
+            onChangeText={setNewsletterMessage}
+            multiline
+          />
+
+          <Pressable
+            style={[
+              styles.publishButton,
+              (sendingNewsletter || newsletterRecipientCount === 0) && styles.forwardButtonDisabled,
+            ]}
+            onPress={sendVolunteerNewsletter}
+            disabled={sendingNewsletter || newsletterRecipientCount === 0}>
+            {sendingNewsletter ? (
+              <ActivityIndicator color={Colors.white} />
+            ) : (
+              <>
+                <Ionicons name="send-outline" size={18} color={Colors.white} />
+                <Text style={styles.publishButtonText}>
+                  Send mail to {newsletterRecipientCount} volunteer
+                  {newsletterRecipientCount === 1 ? '' : 's'}
+                </Text>
+              </>
+            )}
+          </Pressable>
+
+          <Text style={styles.helperText}>
+            Your device mail app opens with BCC recipients so volunteer emails stay private.
+          </Text>
+
+          {volunteerContacts.length > 0 ? (
+            <>
+              <Text style={styles.sectionHeading}>Volunteer list</Text>
+              {volunteerContacts.slice(0, 40).map((contact) => (
+                <View key={contact.email} style={styles.volunteerRow}>
+                  <View style={styles.volunteerAvatar}>
+                    <Text style={styles.volunteerAvatarText}>
+                      {(contact.full_name || 'V').charAt(0).toUpperCase()}
+                    </Text>
+                  </View>
+                  <View style={styles.volunteerText}>
+                    <Text style={styles.volunteerName}>{contact.full_name || 'Volunteer'}</Text>
+                    <Text style={styles.volunteerEmail}>{contact.email}</Text>
+                  </View>
+                </View>
+              ))}
+              {volunteerContacts.length > 40 ? (
+                <Text style={styles.helperText}>
+                  Showing first 40 of {volunteerContacts.length} volunteers.
+                </Text>
+              ) : null}
+            </>
+          ) : (
+            <Text style={styles.empty}>No volunteers have signed up yet.</Text>
+          )}
+        </KeyboardAwareScrollView>
       ) : section === 'events' ? (
-        <ScrollView
+        <KeyboardAwareScrollView
           contentContainerStyle={styles.form}
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={Colors.primary} />
@@ -619,9 +1014,72 @@ export default function AdminPanelScreen() {
               );
             })
           )}
-        </ScrollView>
+        </KeyboardAwareScrollView>
+      ) : section === 'chalkboard' ? (
+        <KeyboardAwareScrollView
+          contentContainerStyle={styles.list}
+          refreshControl={
+            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={Colors.primary} />
+          }>
+          <Text style={styles.sectionHint}>
+            Citizen notes sync to every phone and auto-erase after {STICKY_NOTE_TTL_DAYS} days. Pin a
+            note to keep it on the town chalkboard until you unpin or erase it.
+          </Text>
+          {stickyNotes.length === 0 ? (
+            <Text style={styles.empty}>No chalkboard notes right now.</Text>
+          ) : (
+            stickyNotes.map((note) => (
+              <View key={note.id} style={styles.card}>
+                <View style={styles.noteCardHeader}>
+                  <Text style={[styles.cardTitle, { flex: 1 }]} numberOfLines={3}>
+                    {note.body}
+                  </Text>
+                  {note.pinned ? (
+                    <View style={styles.pinnedChip}>
+                      <Ionicons name="pin" size={12} color={Colors.orange} />
+                      <Text style={styles.pinnedChipText}>Pinned</Text>
+                    </View>
+                  ) : null}
+                </View>
+                <Text style={styles.cardMeta}>
+                  {note.author_name} · {new Date(note.created_at).toLocaleString()}
+                  {note.pinned
+                    ? ' · stays until you remove it'
+                    : (() => {
+                        const left = formatStickyNoteRemaining(note);
+                        return left ? ` · ${left}` : '';
+                      })()}
+                </Text>
+                <View style={styles.noteActions}>
+                  <Pressable
+                    style={[styles.secondaryButton, note.pinned && styles.secondaryButtonActive]}
+                    onPress={() => toggleStickyPin(note)}
+                    disabled={pinningNoteId === note.id}>
+                    {pinningNoteId === note.id ? (
+                      <ActivityIndicator color={Colors.primary} size="small" />
+                    ) : (
+                      <Text style={styles.secondaryButtonText}>
+                        {note.pinned ? 'Unpin' : 'Pin to stay'}
+                      </Text>
+                    )}
+                  </Pressable>
+                  <Pressable
+                    style={styles.dangerButton}
+                    onPress={() => eraseStickyNote(note)}
+                    disabled={deletingNoteId === note.id}>
+                    {deletingNoteId === note.id ? (
+                      <ActivityIndicator color={Colors.white} size="small" />
+                    ) : (
+                      <Text style={styles.dangerButtonText}>Erase</Text>
+                    )}
+                  </Pressable>
+                </View>
+              </View>
+            ))
+          )}
+        </KeyboardAwareScrollView>
       ) : section === 'emergencies' ? (
-        <ScrollView
+        <KeyboardAwareScrollView
           contentContainerStyle={styles.list}
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={Colors.primary} />
@@ -657,9 +1115,9 @@ export default function AdminPanelScreen() {
               </View>
             ))
           )}
-        </ScrollView>
+        </KeyboardAwareScrollView>
       ) : (
-        <ScrollView
+        <KeyboardAwareScrollView
           contentContainerStyle={styles.list}
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={Colors.primary} />
@@ -753,7 +1211,7 @@ export default function AdminPanelScreen() {
             );
             })
           )}
-        </ScrollView>
+        </KeyboardAwareScrollView>
       )}
     </SafeAreaView>
   );
@@ -780,6 +1238,25 @@ const styles = StyleSheet.create({
     borderBottomColor: Colors.border,
     gap: Spacing.sm,
   },
+  localModeBanner: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: Spacing.sm,
+    marginHorizontal: Spacing.md,
+    marginTop: Spacing.md,
+    padding: Spacing.md,
+    borderRadius: Radius.md,
+    backgroundColor: Colors.orangeLight,
+    borderWidth: 1,
+    borderColor: '#F0C9A8',
+  },
+  localModeText: {
+    flex: 1,
+    fontSize: 13,
+    lineHeight: 18,
+    color: Colors.text,
+    fontWeight: '600',
+  },
   backButton: {
     width: 36,
     height: 36,
@@ -795,12 +1272,12 @@ const styles = StyleSheet.create({
   title: {
     fontSize: 22,
     fontWeight: '700',
-    color: Colors.text,
+    color: Colors.white,
   },
   subtitle: {
     marginTop: 2,
     fontSize: 13,
-    color: Colors.textSecondary,
+    color: 'rgba(255,255,255,0.72)',
     lineHeight: 18,
   },
   signOutButton: {
@@ -1045,6 +1522,175 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     letterSpacing: 0.5,
   },
+  newsletterStatCard: {
+    backgroundColor: Colors.white,
+    borderRadius: Radius.lg,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    padding: Spacing.md,
+    alignItems: 'center',
+    marginBottom: Spacing.sm,
+  },
+  newsletterStatValue: {
+    fontSize: 36,
+    fontWeight: '800',
+    color: Colors.primary,
+  },
+  newsletterStatLabel: {
+    marginTop: 2,
+    fontSize: 14,
+    fontWeight: '700',
+    color: Colors.text,
+  },
+  newsletterStatHint: {
+    marginTop: 4,
+    fontSize: 12,
+    color: Colors.textSecondary,
+  },
+  audienceOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+    backgroundColor: Colors.white,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: Radius.lg,
+    padding: Spacing.md,
+    marginBottom: Spacing.sm,
+  },
+  audienceOptionActive: {
+    backgroundColor: Colors.greenLight,
+    borderColor: Colors.primary,
+  },
+  audienceTextWrap: {
+    flex: 1,
+    minWidth: 0,
+  },
+  audienceTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: Colors.text,
+  },
+  audienceTitleActive: {
+    color: Colors.primary,
+  },
+  audienceHint: {
+    marginTop: 3,
+    fontSize: 12,
+    lineHeight: 17,
+    color: Colors.textMuted,
+  },
+  audienceHintActive: {
+    color: Colors.primaryLight,
+  },
+  audienceCount: {
+    minWidth: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.card,
+  },
+  audienceCountActive: {
+    backgroundColor: Colors.primary,
+  },
+  audienceCountText: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: Colors.textSecondary,
+  },
+  audienceCountTextActive: {
+    color: Colors.white,
+  },
+  newsletterMessage: {
+    minHeight: 140,
+  },
+  volunteerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+    backgroundColor: Colors.white,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    padding: Spacing.sm,
+    marginBottom: Spacing.sm,
+  },
+  volunteerAvatar: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.greenLight,
+  },
+  volunteerAvatarText: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: Colors.primary,
+  },
+  volunteerText: {
+    flex: 1,
+    minWidth: 0,
+  },
+  volunteerName: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: Colors.text,
+  },
+  volunteerEmail: {
+    marginTop: 1,
+    fontSize: 12,
+    color: Colors.textSecondary,
+  },
+  volunteerMeta: {
+    marginTop: 4,
+    fontSize: 12,
+    fontWeight: '600',
+    color: Colors.primary,
+  },
+  volunteerBio: {
+    marginTop: 4,
+    fontSize: 12,
+    lineHeight: 16,
+    color: Colors.textMuted,
+  },
+  skillSelect: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: Colors.white,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: Radius.md,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: 14,
+  },
+  skillSelectText: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: Colors.text,
+  },
+  skillSelectPlaceholder: {
+    color: Colors.textMuted,
+    fontWeight: '500',
+  },
+  clearSkill: {
+    alignSelf: 'flex-start',
+    marginTop: Spacing.sm,
+  },
+  clearSkillText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: Colors.orange,
+  },
+  skillResultCount: {
+    marginTop: Spacing.md,
+    marginBottom: Spacing.sm,
+    fontSize: 14,
+    fontWeight: '700',
+    color: Colors.text,
+  },
   eventPhotoButton: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1128,6 +1774,69 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     color: Colors.textSecondary,
     marginTop: Spacing.xl,
+  },
+  sectionHint: {
+    fontSize: 13,
+    lineHeight: 19,
+    color: Colors.textSecondary,
+    marginBottom: Spacing.sm,
+  },
+  noteCardHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: Spacing.sm,
+  },
+  pinnedChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#FFF4E8',
+    borderRadius: Radius.pill,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  pinnedChipText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: Colors.orange,
+  },
+  noteActions: {
+    flexDirection: 'row',
+    gap: Spacing.sm,
+    marginTop: Spacing.md,
+  },
+  secondaryButton: {
+    flex: 1,
+    borderWidth: 1.5,
+    borderColor: Colors.primary,
+    borderRadius: Radius.pill,
+    paddingVertical: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 40,
+  },
+  secondaryButtonActive: {
+    backgroundColor: '#EEF6F4',
+  },
+  secondaryButtonText: {
+    color: Colors.primary,
+    fontWeight: '700',
+    fontSize: 13,
+  },
+  dangerButton: {
+    borderRadius: Radius.pill,
+    backgroundColor: Colors.red,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 40,
+    minWidth: 84,
+  },
+  dangerButtonText: {
+    color: Colors.white,
+    fontWeight: '700',
+    fontSize: 13,
   },
   card: {
     backgroundColor: Colors.white,

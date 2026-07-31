@@ -13,7 +13,6 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { useLevelUp } from '@/context/LevelUpContext';
 import { useVolunteer } from '@/context/VolunteerContext';
 import { api, formatEventDateParts } from '@/lib/api';
 import { Colors, Radius, Spacing } from '@/constants/theme';
@@ -35,8 +34,7 @@ function formatFullDate(startsAt: string) {
 export default function EventDetailScreen() {
   const router = useRouter();
   const { id } = useLocalSearchParams<{ id: string }>();
-  const { guestId, newsletter, profile, refresh } = useVolunteer();
-  const { celebrateIfLeveledUp } = useLevelUp();
+  const { guestId, refresh } = useVolunteer();
   const [event, setEvent] = useState<Event | null>(null);
   const [loading, setLoading] = useState(true);
   const [rsvpLoading, setRsvpLoading] = useState(false);
@@ -56,14 +54,10 @@ export default function EventDetailScreen() {
 
     setRsvpLoading(true);
     try {
-      const beforeEvents = newsletter?.events_attended ?? profile?.events_joined ?? 0;
-      await api.toggleRsvp(guestId, event.id);
-      const updated = await refresh();
-      const afterEvents =
-        updated.newsletter?.events_attended ?? updated.profile.events_joined ?? beforeEvents;
-
-      celebrateIfLeveledUp(beforeEvents, afterEvents);
-      await loadEvent();
+      const updatedEvent = await api.toggleRsvp(guestId, event.id);
+      if (updatedEvent) setEvent(updatedEvent);
+      // Soft refresh in background — don't block the RSVP button
+      void refresh();
     } finally {
       setRsvpLoading(false);
     }
@@ -160,8 +154,12 @@ export default function EventDetailScreen() {
                 <Ionicons name="people-outline" size={18} color={Colors.primary} />
               </View>
               <View style={styles.metaTextWrap}>
-                <Text style={styles.metaLabel}>Volunteers</Text>
-                <Text style={styles.metaValue}>{event.attendee_count} going</Text>
+                <Text style={styles.metaLabel}>Volunteers RSVPed</Text>
+                <Text style={styles.metaValue}>
+                  {event.attendee_count === 0
+                    ? 'Nobody yet — be the first'
+                    : `${event.attendee_count} ${event.attendee_count === 1 ? 'person' : 'people'}`}
+                </Text>
               </View>
             </View>
           </View>
@@ -175,9 +173,13 @@ export default function EventDetailScreen() {
 
       <View style={styles.footer}>
         <View style={styles.footerInfo}>
-          <Text style={styles.footerLabel}>{event.is_going ? 'You are going' : 'Join this drive'}</Text>
+          <Text style={styles.footerLabel}>
+            {event.is_going ? 'You are going' : 'Join this drive'}
+          </Text>
           <Text style={styles.footerHint}>
-            {event.is_going ? 'Tap to cancel your RSVP' : 'RSVP to count toward your volunteer level'}
+            {event.attendee_count === 0
+              ? 'Be the first to RSVP'
+              : `${event.attendee_count} ${event.attendee_count === 1 ? 'volunteer has' : 'volunteers have'} RSVPed`}
           </Text>
         </View>
         <Pressable

@@ -41,6 +41,19 @@ export type Event = {
   image_url: string | null;
   attendee_count: number;
   is_going: boolean;
+  /** Volunteer marked this past drive as completed */
+  is_completed?: boolean;
+};
+
+/** Past RSVP drives waiting for / already checked in */
+export type VolunteerDriveCheckIn = {
+  id: string;
+  title: string;
+  category: string;
+  starts_at: string;
+  location_label: string;
+  image_url: string | null;
+  completed: boolean;
 };
 
 export type CommunityPost = {
@@ -55,6 +68,8 @@ export type CommunityPost = {
   author_initial: string;
   likes: number;
   liked_by_me: boolean;
+  guest_id?: string;
+  image_url?: string | null;
 };
 
 export type Badge = {
@@ -64,12 +79,51 @@ export type Badge = {
   color: string;
   bg_color: string;
   locked: boolean;
+  tier?: 'bronze' | 'silver' | 'gold' | 'platinum' | 'coral';
+  shape?:
+    | 'flag'
+    | 'spark'
+    | 'hands'
+    | 'trophy'
+    | 'calendar'
+    | 'clipboard'
+    | 'leaf'
+    | 'star'
+    | 'lens'
+    | 'crest';
+  description?: string;
+  requirement_type?: string;
+  requirement_count?: number;
+  progress?: number;
 };
 
 export type DashboardStats = {
-  issues: number;
-  resolved: number;
-  neighbors: number;
+  drives_completed: number;
+  issues_reported: number;
+  issues_resolved: number;
+};
+
+export type TownNewsSnapshot = {
+  active_volunteers: number;
+  issues_this_week: number;
+  drives_completed: number;
+  issues_resolved: number;
+  next_event: { id: string; title: string; starts_at: string } | null;
+  community_hero: { name: string; detail: string } | null;
+};
+
+/** Single cloud payload so home banner + glance metrics stay in sync. */
+export type HomeCloudSnapshot = {
+  stats: DashboardStats;
+  news: TownNewsSnapshot;
+  events: Event[];
+};
+
+export type TownNewsItem = {
+  id: string;
+  icon: string;
+  text: string;
+  route?: string;
 };
 
 export type CreateReportInput = {
@@ -88,6 +142,7 @@ export type EmergencyAlert = {
   id: string;
   guest_id: string;
   citizen_name: string;
+  citizen_phone: string | null;
   location_label: string;
   latitude: number;
   longitude: number;
@@ -95,6 +150,10 @@ export type EmergencyAlert = {
   status: EmergencyAlertStatus;
   responded_by_guest_id: string | null;
   responded_by_name: string | null;
+  responder_phone: string | null;
+  responder_latitude: number | null;
+  responder_longitude: number | null;
+  responder_location_updated_at: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -103,6 +162,7 @@ export type CreateEmergencyAlertInput = {
   location_label: string;
   latitude: number;
   longitude: number;
+  phone: string;
   message?: string;
 };
 
@@ -143,6 +203,7 @@ export type PushTokenRecord = {
 };
 
 export type UpdateProfileInput = {
+  bio?: string;
   interests?: string;
   skills?: string;
   availability?: string;
@@ -151,6 +212,7 @@ export type UpdateProfileInput = {
   registered?: boolean;
   events_joined?: number;
   reports_submitted?: number;
+  hours_volunteered?: number;
 };
 
 export type NewsletterSubscription = {
@@ -162,6 +224,12 @@ export type NewsletterSubscription = {
   town_newsletter: boolean;
   events_attended: number;
   reports_flagged: number;
+  hours_volunteered?: number;
+  community_hero_features?: number;
+  bio?: string;
+  cause?: string;
+  skills?: string;
+  availability?: string;
   volunteer_level_id?: string;
   level_name?: string;
   level_rank?: number;
@@ -174,6 +242,19 @@ export type NewsletterSubscription = {
   next_level_min_events?: number | null;
   subscribed_at: string;
   updated_at?: string;
+};
+
+export type VolunteerDirectoryEntry = {
+  guest_id: string;
+  email: string;
+  full_name: string;
+  bio: string;
+  cause: string;
+  skills: string;
+  availability: string;
+  events_attended: number;
+  hours_volunteered?: number;
+  registered_active: boolean;
 };
 
 export type VolunteerProfileRecord = NewsletterSubscription & {
@@ -203,4 +284,9 @@ export type NewsletterUpdateInput = {
   event_updates?: boolean;
   town_newsletter?: boolean;
   full_name?: string;
+};
+
+export type TakeVolunteerBreakInput = {
+  event_updates: boolean;
+  town_newsletter: boolean;
 };

@@ -56,6 +56,7 @@ create table if not exists public.event_rsvps (
   event_id uuid not null references public.events(id) on delete cascade,
   user_id uuid references public.profiles(id) on delete set null,
   guest_id text,
+  completed_at timestamptz,
   created_at timestamptz not null default now(),
   unique(event_id, guest_id)
 );
@@ -69,6 +70,7 @@ create table if not exists public.community_posts (
   title text not null,
   description text not null default '',
   featured boolean not null default false,
+  image_url text,
   created_at timestamptz not null default now()
 );
 
@@ -88,7 +90,9 @@ create table if not exists public.badges (
   color text not null,
   bg_color text not null,
   requirement_type text not null,
-  requirement_count integer not null default 1
+  requirement_count integer not null default 1,
+  description text not null default '',
+  tier text not null default 'gold'
 );
 
 -- Volunteer level ladder: Supporter → Contributor → Guardian → Champion → Elite → Legend
@@ -240,6 +244,12 @@ create table if not exists public.newsletter_subscribers (
   town_newsletter boolean not null default true,
   events_attended integer not null default 0 check (events_attended >= 0),
   reports_flagged integer not null default 0 check (reports_flagged >= 0),
+  hours_volunteered integer not null default 0 check (hours_volunteered >= 0),
+  community_hero_features integer not null default 0 check (community_hero_features >= 0),
+  bio text not null default '',
+  cause text not null default '',
+  skills text not null default '',
+  availability text not null default '',
   volunteer_level_id text not null default 'supporter' references public.volunteer_levels(id),
   subscribed_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
@@ -272,6 +282,12 @@ select
   ns.town_newsletter,
   ns.events_attended,
   ns.reports_flagged,
+  ns.hours_volunteered,
+  ns.community_hero_features,
+  ns.bio,
+  ns.cause,
+  ns.skills,
+  ns.availability,
   ns.volunteer_level_id,
   vl.name as level_name,
   vl.rank_order as level_rank,
@@ -340,6 +356,7 @@ create table if not exists public.emergency_alerts (
   id uuid primary key default uuid_generate_v4(),
   guest_id text not null,
   citizen_name text not null default 'Citizen',
+  citizen_phone text,
   location_label text not null,
   latitude double precision not null,
   longitude double precision not null,
@@ -347,6 +364,10 @@ create table if not exists public.emergency_alerts (
   status text not null default 'active' check (status in ('active', 'responding', 'resolved')),
   responded_by_guest_id text,
   responded_by_name text,
+  responder_phone text,
+  responder_latitude double precision,
+  responder_longitude double precision,
+  responder_location_updated_at timestamptz,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -381,3 +402,17 @@ create policy "Anyone can upsert department contacts"
 
 create policy "Anyone can update department contacts"
   on public.department_contacts for update using (true);
+
+-- Allow Expo publishable/anon key to hit tables (RLS still applies)
+grant usage on schema public to anon, authenticated;
+grant select, insert, update, delete on all tables in schema public to anon, authenticated;
+grant usage, select on all sequences in schema public to anon, authenticated;
+grant execute on all functions in schema public to anon, authenticated;
+grant select on public.volunteer_profiles to anon, authenticated;
+alter default privileges in schema public
+  grant select, insert, update, delete on tables to anon, authenticated;
+alter default privileges in schema public
+  grant usage, select on sequences to anon, authenticated;
+alter default privileges in schema public
+  grant execute on functions to anon, authenticated;
+
