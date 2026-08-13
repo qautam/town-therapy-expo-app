@@ -241,6 +241,8 @@ create table if not exists public.newsletter_subscribers (
   email text not null unique,
   full_name text not null default '',
   guest_id text,
+  -- TT-HZB-{L}{M}{YY}{NNN}: e.g. TT-HZB-P826001
+  volunteer_code text unique,
   event_updates boolean not null default true,
   town_newsletter boolean not null default true,
   events_attended integer not null default 0 check (events_attended >= 0),
@@ -279,6 +281,7 @@ select
   ns.email,
   ns.full_name,
   ns.guest_id,
+  ns.volunteer_code,
   ns.event_updates,
   ns.town_newsletter,
   ns.events_attended,

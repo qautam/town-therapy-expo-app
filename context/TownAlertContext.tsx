@@ -4,6 +4,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from 'react';
@@ -36,17 +37,34 @@ export function townAlert(title: string, message?: string, buttons?: TownAlertBu
 
 export function TownAlertProvider({ children }: { children: ReactNode }) {
   const [alert, setAlert] = useState<TownAlertRequest | null>(null);
+  const queueRef = useRef<TownAlertRequest[]>([]);
+  const visibleRef = useRef(false);
 
-  const show = useCallback<ShowTownAlert>((title, message, buttons) => {
-    setAlert({
-      title,
-      message,
-      buttons:
-        buttons && buttons.length > 0
-          ? buttons
-          : [{ text: 'OK', style: 'default' }],
-    });
+  const present = useCallback((next: TownAlertRequest) => {
+    visibleRef.current = true;
+    setAlert(next);
   }, []);
+
+  const show = useCallback<ShowTownAlert>(
+    (title, message, buttons) => {
+      const next: TownAlertRequest = {
+        title,
+        message,
+        buttons:
+          buttons && buttons.length > 0
+            ? buttons
+            : [{ text: 'OK', style: 'default' }],
+      };
+
+      if (visibleRef.current) {
+        queueRef.current.push(next);
+        return;
+      }
+
+      present(next);
+    },
+    [present]
+  );
 
   useEffect(() => {
     bridge = show;
@@ -55,7 +73,15 @@ export function TownAlertProvider({ children }: { children: ReactNode }) {
     };
   }, [show]);
 
-  const dismiss = useCallback(() => setAlert(null), []);
+  const dismiss = useCallback(() => {
+    visibleRef.current = false;
+    setAlert(null);
+    const queued = queueRef.current.shift();
+    if (queued) {
+      // Let the modal close before opening the next card.
+      setTimeout(() => present(queued), 280);
+    }
+  }, [present]);
 
   const value = useMemo(() => show, [show]);
 

@@ -7,6 +7,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { AchievementBadge, type BadgeTier } from '@/components/AchievementBadge';
 import { AboutYouSection } from '@/components/AboutYouSection';
+import { AboutYouSetupModal } from '@/components/AboutYouSetupModal';
 import { KeyboardAwareScrollView } from '@/components/KeyboardAwareScrollView';
 import { ConfirmDrivesSection } from '@/components/ConfirmDrivesSection';
 import { TakeBreakModal } from '@/components/TakeBreakModal';
@@ -18,12 +19,14 @@ import {
   VolunteerJourneyStrip,
 } from '@/components/VolunteerProfileCards';
 import { useAdminAuth } from '@/context/AdminAuthContext';
+import { useLocale } from '@/context/LocaleContext';
 import { useVolunteer } from '@/context/VolunteerContext';
 import { brand } from '@/constants/data';
 import { getVolunteerIdCardDimensions, PROFILE_PAGE_GUTTER } from '@/constants/profileLayout';
 import { Colors, Radius, Spacing } from '@/constants/theme';
 import { api } from '@/lib/api';
 import { evaluateBadges, EMPTY_BADGE_STATS } from '@/lib/badges';
+import { localeLabels, type AppLocale } from '@/lib/i18n';
 import { saveViewAsImage, type IdentityCardCaptureRef } from '@/lib/saveViewAsImage';
 import { hoursFromDrives } from '@/lib/volunteerHours';
 import { getVolunteerGrowthStage, getVolunteerLevel } from '@/lib/volunteerLevels';
@@ -33,8 +36,10 @@ import { useTownGreeting } from '@/hooks/useTownGreeting';
 import { normalizeVolunteerName } from '@/lib/volunteerName';
 import type { Badge } from '@/types/database';
 import { townAlert } from '@/context/TownAlertContext';
+import { shareApp } from '@/lib/shareEvent';
 
 function BadgeGrid({ badgeList }: { badgeList: Badge[] }) {
+  const { t } = useLocale();
   const unlocked = badgeList.filter((b) => !b.locked).length;
   const { collapsed, toggle } = useCollapsedSection('profile-achievements');
 
@@ -42,9 +47,11 @@ function BadgeGrid({ badgeList }: { badgeList: Badge[] }) {
     <View style={styles.section}>
       <View style={styles.sectionHeader}>
         <View style={styles.sectionHeaderCopy}>
-          <Text style={[styles.sectionTitle, styles.sectionTitleInHeader]}>Achievements</Text>
+          <Text style={[styles.sectionTitle, styles.sectionTitleInHeader]}>
+            {t('profile.achievements')}
+          </Text>
           <Text style={styles.sectionCount}>
-            {unlocked}/{badgeList.length} earned
+            {t('profile.unlocked', { count: unlocked })}
           </Text>
         </View>
         <Pressable
@@ -115,25 +122,61 @@ function MenuRow({
 
 export default function ProfileScreen() {
   const router = useRouter();
+  const { t, locale, setLocale } = useLocale();
   const { width: screenWidth } = useWindowDimensions();
   const idCardDimensions = useMemo(
     () => getVolunteerIdCardDimensions(screenWidth),
     [screenWidth]
   );
-  const { profile, newsletter, guestId, refresh, takeVolunteerBreak, resumeVolunteer, updateProfile, statsReady } =
-    useVolunteer();
+  const {
+    profile,
+    newsletter,
+    guestId,
+    refresh,
+    takeVolunteerBreak,
+    resumeVolunteer,
+    newsletterUnsubscribe,
+    completeAboutYouOnboarding,
+    updateProfile,
+    statsReady,
+    pendingAboutSetup,
+  } = useVolunteer();
   const { admin } = useAdminAuth();
   const [badgeList, setBadgeList] = useState<Badge[]>(() => evaluateBadges(EMPTY_BADGE_STATS));
   const [takingBreak, setTakingBreak] = useState(false);
+  const [signingOut, setSigningOut] = useState(false);
   const [showBreakModal, setShowBreakModal] = useState(false);
+  const [showAboutSetup, setShowAboutSetup] = useState(false);
+  const [savingAboutSetup, setSavingAboutSetup] = useState(false);
   const [resuming, setResuming] = useState(false);
   const [savingAbout, setSavingAbout] = useState(false);
   const [downloadingCard, setDownloadingCard] = useState(false);
   const [capturingCard, setCapturingCard] = useState(false);
   const idCardRef = useRef<IdentityCardCaptureRef>(null);
 
+  const pickLanguage = useCallback(() => {
+    townAlert(t('profile.language'), t('profile.languageSub'), [
+      {
+        text: localeLabels.en,
+        onPress: () => {
+          void setLocale('en' as AppLocale);
+        },
+      },
+      {
+        text: localeLabels.hi,
+        onPress: () => {
+          void setLocale('hi' as AppLocale);
+        },
+      },
+      { text: t('common.cancel'), style: 'cancel' },
+    ]);
+  }, [setLocale, t]);
+
   const isRegistered = Boolean(profile?.registered);
   const isOnBreak = Boolean(newsletter) && !isRegistered;
+  const hasVolunteerId = Boolean(newsletter?.volunteer_code?.trim());
+  const needsAboutSetup =
+    isRegistered && (pendingAboutSetup || !hasVolunteerId);
   // Wait for reconcile so we never flash stale AsyncStorage counters (old Math.max inflation).
   const eventsAttended = !statsReady
     ? 0
@@ -166,6 +209,14 @@ export default function ProfileScreen() {
     api.listBadges(guestId).then(setBadgeList);
   }, [guestId, eventsAttended, reportsFlagged]);
 
+  useEffect(() => {
+    if (needsAboutSetup) {
+      setShowAboutSetup(true);
+    } else {
+      setShowAboutSetup(false);
+    }
+  }, [needsAboutSetup]);
+
   const saveAboutYou = async (input: {
     bio: string;
     interests: string;
@@ -174,12 +225,42 @@ export default function ProfileScreen() {
   }) => {
     setSavingAbout(true);
     try {
-      await updateProfile(input);
+      // If ID was never minted (edge case), mint it on first About You save.
+      if (!hasVolunteerId) {
+        await completeAboutYouOnboarding(input);
+      } else {
+        await updateProfile(input);
+      }
     } catch (error) {
       townAlert('Could not save', error instanceof Error ? error.message : 'Try again.');
       throw error;
     } finally {
       setSavingAbout(false);
+    }
+  };
+
+  const finishAboutSetup = async (input: {
+    bio: string;
+    interests: string;
+    skills: string;
+    availability: string;
+  }) => {
+    setSavingAboutSetup(true);
+    try {
+      await completeAboutYouOnboarding(input);
+      setShowAboutSetup(false);
+      router.replace('/(tabs)/profile' as Href);
+      townAlert(
+        'Your volunteer ID is ready',
+        'You can edit About You anytime on your profile.'
+      );
+    } catch (error) {
+      townAlert(
+        'Could not create your ID',
+        error instanceof Error ? error.message : 'Try again.'
+      );
+    } finally {
+      setSavingAboutSetup(false);
     }
   };
 
@@ -204,6 +285,39 @@ export default function ProfileScreen() {
     } finally {
       setTakingBreak(false);
     }
+  };
+
+  const performSignOut = async () => {
+    setSigningOut(true);
+    try {
+      await newsletterUnsubscribe();
+      townAlert(t('profile.signOutDoneTitle'), t('profile.signOutDoneMsg'));
+    } catch (error) {
+      townAlert(
+        'Could not sign out',
+        error instanceof Error ? error.message : t('common.tryAgain')
+      );
+    } finally {
+      setSigningOut(false);
+    }
+  };
+
+  const handleSignOutPress = () => {
+    townAlert(t('profile.signOutNudgeTitle'), t('profile.signOutNudgeMsg'), [
+      {
+        text: t('profile.signOutNudgeContinue'),
+        style: 'destructive',
+        onPress: () => {
+          void performSignOut();
+        },
+      },
+      { text: t('common.cancel'), style: 'cancel' },
+      {
+        // Last non-cancel action → primary styling (the path we want)
+        text: t('profile.signOutNudgeBreak'),
+        onPress: () => setShowBreakModal(true),
+      },
+    ]);
   };
 
   const handleResume = async () => {
@@ -274,11 +388,12 @@ export default function ProfileScreen() {
                 : 'Create your volunteer profile and start healing Hazaribagh with us.'}
           </Text>
 
-          {isRegistered ? (
+          {isRegistered && hasVolunteerId ? (
             <View style={[styles.idCardSlot, idCardDimensions]}>
               <VolunteerIdentityCard
                 ref={idCardRef}
                 name={displayName}
+                volunteerCode={newsletter?.volunteer_code}
                 levelId={level.id}
                 levelName={level.name}
                 drives={eventsAttended}
@@ -294,6 +409,15 @@ export default function ProfileScreen() {
                 downloading={downloadingCard}
               />
             </View>
+          ) : isRegistered && !hasVolunteerId ? (
+            <Pressable style={styles.setupIdCard} onPress={() => setShowAboutSetup(true)}>
+              <Ionicons name="id-card-outline" size={22} color={Colors.primary} />
+              <View style={styles.setupIdCopy}>
+                <Text style={styles.setupIdTitle}>Finish About You</Text>
+                <Text style={styles.setupIdSub}>Add your details to create your volunteer ID</Text>
+              </View>
+              <Ionicons name="arrow-forward" size={18} color={Colors.primary} />
+            </Pressable>
           ) : isOnBreak ? (
             <View style={styles.breakCard}>
               <View style={styles.breakCardTop}>
@@ -316,7 +440,7 @@ export default function ProfileScreen() {
                 onPress={handleResume}
                 disabled={resuming}>
                 <Text style={styles.resumeButtonText}>
-                  {resuming ? 'Resuming…' : 'Resume volunteering'}
+                  {resuming ? '…' : t('profile.resume')}
                 </Text>
               </Pressable>
             </View>
@@ -326,8 +450,8 @@ export default function ProfileScreen() {
                 <Ionicons name="heart" size={22} color={Colors.orange} />
               </View>
               <View style={styles.joinText}>
-                <Text style={styles.joinTitle}>Become a volunteer</Text>
-                <Text style={styles.joinSubtitle}>Sign up to unlock levels, badges, and your growth tree.</Text>
+                <Text style={styles.joinTitle}>{t('profile.joinTitle')}</Text>
+                <Text style={styles.joinSubtitle}>{t('profile.joinSub')}</Text>
               </View>
               <Ionicons name="arrow-forward" size={18} color={Colors.primary} />
             </Pressable>
@@ -346,7 +470,7 @@ export default function ProfileScreen() {
 
         {isRegistered && guestId ? (
           <View style={styles.section}>
-            <ConfirmDrivesSection guestId={guestId} onCompleted={() => void refresh({ reconcile: true })} />
+            <ConfirmDrivesSection guestId={guestId} />
           </View>
         ) : null}
 
@@ -360,7 +484,7 @@ export default function ProfileScreen() {
 
         {isRegistered ? (
           <View style={styles.section}>
-            <Text style={styles.sectionTitle}>About you</Text>
+            <Text style={styles.sectionTitle}>{t('profile.aboutYou')}</Text>
             <AboutYouSection
               bio={aboutBio}
               cause={aboutCause}
@@ -373,37 +497,68 @@ export default function ProfileScreen() {
         ) : null}
 
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>More</Text>
+          <Text style={styles.sectionTitle}>{t('profile.more')}</Text>
           <MenuRow
-            icon="sparkles"
-            title="Dr. Rant"
-            subtitle="Your civic coach — tips, cleanups, and sustainable living"
+            icon="compass"
+            title={t('profile.captain')}
+            subtitle={t('profile.captainSub')}
             tone="warm"
             onPress={() => router.push('/assistant' as Href)}
           />
           <MenuRow
+            icon="language-outline"
+            title={t('profile.language')}
+            subtitle={`${localeLabels[locale]} · ${t('profile.languageSub')}`}
+            onPress={pickLanguage}
+          />
+          <MenuRow
+            icon="share-outline"
+            title={t('profile.share')}
+            subtitle={t('profile.shareSub')}
+            onPress={() => {
+              void shareApp().catch((error) => {
+                townAlert(
+                  'Could not share',
+                  error instanceof Error ? error.message : t('common.tryAgain')
+                );
+              });
+            }}
+          />
+          <MenuRow
             icon="shield-outline"
-            title={admin ? 'Admin panel' : 'Admin login'}
-            subtitle={admin ? 'Manage civic reports' : 'Town admins only'}
+            title={admin ? t('profile.adminPanel') : t('profile.admin')}
+            subtitle={admin ? t('profile.adminPanelSub') : t('profile.adminSub')}
             onPress={() => router.push(admin ? '/admin' : '/admin/login')}
           />
         </View>
 
         {isRegistered ? (
-          <Pressable
-            style={[styles.breakButton, takingBreak && styles.breakButtonDisabled]}
-            onPress={() => setShowBreakModal(true)}
-            disabled={takingBreak}>
-            <Ionicons name="leaf-outline" size={18} color={Colors.primary} />
-            <Text style={styles.breakButtonText}>Take a Break</Text>
-          </Pressable>
+          <View style={styles.accountActions}>
+            <Pressable
+              style={[styles.breakButton, takingBreak && styles.breakButtonDisabled]}
+              onPress={() => setShowBreakModal(true)}
+              disabled={takingBreak || signingOut}>
+              <Ionicons name="leaf-outline" size={18} color={Colors.primary} />
+              <Text style={styles.breakButtonText}>{t('profile.takeBreak')}</Text>
+            </Pressable>
+            <Pressable
+              style={[styles.signOutButton, signingOut && styles.breakButtonDisabled]}
+              onPress={handleSignOutPress}
+              disabled={takingBreak || signingOut}
+              accessibilityRole="button"
+              accessibilityLabel={t('profile.signOut')}>
+              <Ionicons name="log-out-outline" size={18} color={Colors.textMuted} />
+              <Text style={styles.signOutButtonText}>{t('profile.signOut')}</Text>
+            </Pressable>
+            <Text style={styles.signOutHint}>{t('profile.signOutSub')}</Text>
+          </View>
         ) : null}
 
         <View style={styles.footerBlock}>
           <Text style={styles.footerBrand}>{brand.name}</Text>
           <Text style={styles.footerLocation}>{brand.location}</Text>
           <View style={styles.footerDivider} />
-          <Text style={styles.footerLinkLead}>For more information visit</Text>
+          <Text style={styles.footerLinkLead}>{t('profile.footerInfo')}</Text>
           <Pressable
             style={({ pressed }) => [styles.footerLinkBtn, pressed && styles.footerLinkBtnPressed]}
             onPress={() => void Linking.openURL(brand.website)}
@@ -422,6 +577,13 @@ export default function ProfileScreen() {
         initialTownNewsletter={newsletter?.town_newsletter ?? true}
         onCancel={() => setShowBreakModal(false)}
         onConfirm={confirmTakeBreak}
+      />
+
+      <AboutYouSetupModal
+        visible={showAboutSetup && needsAboutSetup}
+        memberName={displayName}
+        saving={savingAboutSetup}
+        onComplete={finishAboutSetup}
       />
     </SafeAreaView>
   );
@@ -445,6 +607,31 @@ const styles = StyleSheet.create({
   },
   idCardSlot: {
     alignSelf: 'center',
+  },
+  setupIdCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+    backgroundColor: Colors.white,
+    borderRadius: Radius.lg,
+    borderWidth: 1.5,
+    borderColor: Colors.border,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: 14,
+  },
+  setupIdCopy: {
+    flex: 1,
+    gap: 2,
+  },
+  setupIdTitle: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: Colors.primaryDark,
+  },
+  setupIdSub: {
+    fontSize: 13,
+    color: Colors.textSecondary,
+    lineHeight: 18,
   },
   heroTop: {
     flexDirection: 'row',
@@ -736,9 +923,12 @@ const styles = StyleSheet.create({
     marginTop: 2,
     lineHeight: 16,
   },
-  breakButton: {
+  accountActions: {
     marginTop: Spacing.lg,
     marginHorizontal: Spacing.lg,
+    gap: Spacing.sm,
+  },
+  breakButton: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
@@ -761,6 +951,31 @@ const styles = StyleSheet.create({
     color: Colors.primary,
     fontWeight: '800',
     fontSize: 15,
+  },
+  signOutButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 14,
+    borderRadius: Radius.pill,
+    borderWidth: 1.5,
+    borderColor: Colors.border,
+    backgroundColor: Colors.white,
+  },
+  signOutButtonText: {
+    color: Colors.textSecondary,
+    fontWeight: '800',
+    fontSize: 15,
+  },
+  signOutHint: {
+    marginTop: 2,
+    textAlign: 'center',
+    fontSize: 12,
+    lineHeight: 16,
+    color: Colors.textMuted,
+    fontWeight: '500',
+    paddingHorizontal: Spacing.md,
   },
   footerBlock: {
     alignItems: 'center',

@@ -1,5 +1,4 @@
-import { Ionicons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
+import { useRouter, type Href } from 'expo-router';
 import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
@@ -13,17 +12,18 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { KeyboardAwareScrollView } from '@/components/KeyboardAwareScrollView';
+import { AboutYouSetupModal } from '@/components/AboutYouSetupModal';
 import { TownTherapyLogo } from '@/components/TownTherapyLogo';
-import { useKeyboardVerticalOffset } from '@/hooks/useKeyboardVerticalOffset';
-import { useTaskDraft } from '@/hooks/useTaskDraft';
 import { WelcomeMemberModal } from '@/components/WelcomeMemberModal';
 import { useVolunteer } from '@/context/VolunteerContext';
-import { brand } from '@/constants/data';
-import { Colors, Radius, Spacing } from '@/constants/theme';
-import { normalizeVolunteerName } from '@/lib/volunteerName';
 import { townAlert } from '@/context/TownAlertContext';
+import { Colors, Radius, Spacing } from '@/constants/theme';
+import { useKeyboardVerticalOffset } from '@/hooks/useKeyboardVerticalOffset';
+import { useTaskDraft } from '@/hooks/useTaskDraft';
+import { isEmailAlreadyRegisteredError } from '@/lib/newsletter';
+import { normalizeVolunteerName } from '@/lib/volunteerName';
 
-type Mode = 'signup' | 'signin' | 'manage';
+type Mode = 'choose' | 'signup' | 'signin' | 'manage';
 
 type NewsletterDraft = {
   mode: Mode;
@@ -34,7 +34,7 @@ type NewsletterDraft = {
 };
 
 const EMPTY_NEWSLETTER_DRAFT: NewsletterDraft = {
-  mode: 'signup',
+  mode: 'choose',
   fullName: '',
   email: '',
   eventUpdates: true,
@@ -43,34 +43,34 @@ const EMPTY_NEWSLETTER_DRAFT: NewsletterDraft = {
 
 export default function NewsletterScreen() {
   const router = useRouter();
-  const {
-    newsletter,
-    newsletterSignUp,
-    newsletterSignIn,
-    updateNewsletter,
-    newsletterUnsubscribe,
-  } = useVolunteer();
+  const { newsletter, newsletterSignUp, newsletterSignIn, completeAboutYouOnboarding } =
+    useVolunteer();
   const keyboardOffset = useKeyboardVerticalOffset();
   const [loading, setLoading] = useState(false);
   const [showWelcome, setShowWelcome] = useState(false);
+  const [showAboutSetup, setShowAboutSetup] = useState(false);
+  const [savingAbout, setSavingAbout] = useState(false);
   const [welcomeName, setWelcomeName] = useState('');
   const { value: draft, setValue: setDraft, clearDraft } = useTaskDraft(
     'newsletter-signup',
     EMPTY_NEWSLETTER_DRAFT,
-    { pause: loading }
+    { pause: loading || savingAbout }
   );
   const { mode, fullName, email, eventUpdates, townNewsletter } = draft;
 
   useEffect(() => {
     if (!newsletter) return;
-    setDraft({
-      mode: 'manage',
+    setDraft((current) => ({
+      ...current,
+      mode: current.mode === 'signin' || current.mode === 'signup' ? current.mode : 'manage',
       fullName: newsletter.full_name,
       email: newsletter.email,
       eventUpdates: newsletter.event_updates,
       townNewsletter: newsletter.town_newsletter,
-    });
+    }));
   }, [newsletter, setDraft]);
+
+  const goChoose = () => setDraft((current) => ({ ...current, mode: 'choose' }));
 
   const handleSignUp = async () => {
     if (!fullName.trim() || !email.trim()) {
@@ -100,6 +100,25 @@ export default function NewsletterScreen() {
       await clearDraft();
       setShowWelcome(true);
     } catch (error) {
+      if (isEmailAlreadyRegisteredError(error)) {
+        townAlert(
+          'This email is already signed up',
+          'Please sign in with this email instead.',
+          [
+            { text: 'Cancel', style: 'cancel' },
+            {
+              text: 'Sign in',
+              onPress: () =>
+                setDraft((current) => ({
+                  ...current,
+                  mode: 'signin',
+                  email: email.trim().toLowerCase(),
+                })),
+            },
+          ]
+        );
+        return;
+      }
       townAlert('Sign up failed', error instanceof Error ? error.message : 'Try again.');
     } finally {
       setLoading(false);
@@ -108,7 +127,7 @@ export default function NewsletterScreen() {
 
   const handleSignIn = async () => {
     if (!email.trim()) {
-      townAlert('Missing email', 'Enter the email you subscribed with.');
+      townAlert('Missing email', 'Enter the email you signed up with.');
       return;
     }
 
@@ -116,8 +135,8 @@ export default function NewsletterScreen() {
     try {
       await newsletterSignIn(email.trim());
       await clearDraft();
-      townAlert('Welcome back', 'Your email preferences are synced on this device.');
-      setDraft((current) => ({ ...current, mode: 'manage' }));
+      router.replace('/(tabs)/profile' as Href);
+      townAlert('Welcome back', 'Your volunteer profile is synced on this device.');
     } catch (error) {
       townAlert('Sign in failed', error instanceof Error ? error.message : 'Try again.');
     } finally {
@@ -125,52 +144,26 @@ export default function NewsletterScreen() {
     }
   };
 
-  const handleSavePreferences = async () => {
-    if (!eventUpdates && !townNewsletter) {
-      townAlert('Choose at least one', 'Select event updates or the town newsletter.');
-      return;
-    }
-
-    setLoading(true);
+  const handleAboutSetup = async (input: {
+    bio: string;
+    interests: string;
+    skills: string;
+    availability: string;
+  }) => {
+    setSavingAbout(true);
     try {
-      await updateNewsletter({
-        full_name: normalizeVolunteerName(fullName),
-        event_updates: eventUpdates,
-        town_newsletter: townNewsletter,
-      });
-      townAlert('Saved', 'Your email preferences were updated.');
+      await completeAboutYouOnboarding(input);
+      setShowAboutSetup(false);
+      router.replace('/(tabs)/profile' as Href);
+      townAlert('Your volunteer ID is ready', 'You can edit About You anytime on your profile.');
     } catch (error) {
-      townAlert('Update failed', error instanceof Error ? error.message : 'Try again.');
+      townAlert(
+        'Could not create your ID',
+        error instanceof Error ? error.message : 'Try again.'
+      );
     } finally {
-      setLoading(false);
+      setSavingAbout(false);
     }
-  };
-
-  const handleUnsubscribe = () => {
-    townAlert(
-      'Unsubscribe?',
-      'You will stop receiving event and newsletter emails.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Unsubscribe',
-          style: 'destructive',
-          onPress: async () => {
-            setLoading(true);
-            try {
-              await newsletterUnsubscribe();
-              await clearDraft();
-              setDraft(EMPTY_NEWSLETTER_DRAFT);
-              townAlert('Unsubscribed', 'You can sign up again anytime.');
-            } catch (error) {
-              townAlert('Error', error instanceof Error ? error.message : 'Try again.');
-            } finally {
-              setLoading(false);
-            }
-          },
-        },
-      ]
-    );
   };
 
   return (
@@ -182,33 +175,39 @@ export default function NewsletterScreen() {
           <TownTherapyLogo size={72} withShadow />
           <Text style={styles.title}>Become a volunteer</Text>
           <Text style={styles.subtitle}>
-            Sign up to create your volunteer profile and start at Supporter level. No password needed
-            to use the app.
+            Create your volunteer profile and start at Supporter level. No password needed.
           </Text>
         </View>
 
-        {mode !== 'manage' ? (
-          <View style={styles.tabs}>
+        {mode === 'choose' || mode === 'manage' ? (
+          <View style={styles.actions}>
             <Pressable
-              style={[styles.tab, mode === 'signup' && styles.tabActive]}
-              onPress={() => setDraft((current) => ({ ...current, mode: 'signup' }))}>
-              <Text style={[styles.tabText, mode === 'signup' && styles.tabTextActive]}>Sign up</Text>
+              style={styles.primaryButton}
+              onPress={() => setDraft((current) => ({ ...current, mode: 'signup' }))}
+              disabled={loading}>
+              <Text style={styles.primaryButtonText}>Sign up</Text>
             </Pressable>
             <Pressable
-              style={[styles.tab, mode === 'signin' && styles.tabActive]}
-              onPress={() => setDraft((current) => ({ ...current, mode: 'signin' }))}>
-              <Text style={[styles.tabText, mode === 'signin' && styles.tabTextActive]}>Sign in</Text>
+              style={styles.secondaryButton}
+              onPress={() => setDraft((current) => ({ ...current, mode: 'signin' }))}
+              disabled={loading}>
+              <Text style={styles.secondaryButtonText}>Sign in</Text>
+            </Pressable>
+            <Pressable style={styles.skipButton} onPress={() => router.back()} disabled={loading}>
+              <Text style={styles.skipButtonText}>Continue without signing up</Text>
             </Pressable>
           </View>
         ) : null}
 
         {mode === 'signin' ? (
-          <>
+          <View style={styles.form}>
+            <Text style={styles.formTitle}>Sign in</Text>
+            <Text style={styles.formHint}>Use the email you signed up with.</Text>
             <TextInput
               style={styles.input}
               autoCapitalize="none"
               keyboardType="email-address"
-              placeholder="Email you subscribed with"
+              placeholder="Email address"
               placeholderTextColor={Colors.textMuted}
               value={email}
               onChangeText={(value) => setDraft((current) => ({ ...current, email: value }))}
@@ -217,14 +216,19 @@ export default function NewsletterScreen() {
               {loading ? (
                 <ActivityIndicator color={Colors.white} />
               ) : (
-                <Text style={styles.primaryButtonText}>Sign in to sync preferences</Text>
+                <Text style={styles.primaryButtonText}>Sign in</Text>
               )}
             </Pressable>
-          </>
+            <Pressable style={styles.skipButton} onPress={goChoose} disabled={loading}>
+              <Text style={styles.skipButtonText}>Back</Text>
+            </Pressable>
+          </View>
         ) : null}
 
-        {mode === 'signup' || mode === 'manage' ? (
-          <>
+        {mode === 'signup' ? (
+          <View style={styles.form}>
+            <Text style={styles.formTitle}>Sign up</Text>
+            <Text style={styles.formHint}>We’ll use this to save your volunteer profile.</Text>
             <TextInput
               style={styles.input}
               placeholder="Your full name"
@@ -241,7 +245,6 @@ export default function NewsletterScreen() {
               placeholderTextColor={Colors.textMuted}
               value={email}
               onChangeText={(value) => setDraft((current) => ({ ...current, email: value }))}
-              editable={mode === 'signup'}
             />
 
             <View style={styles.preferenceCard}>
@@ -264,7 +267,9 @@ export default function NewsletterScreen() {
               <View style={styles.preferenceRow}>
                 <View style={styles.preferenceText}>
                   <Text style={styles.preferenceTitle}>Town newsletter</Text>
-                  <Text style={styles.preferenceSubtitle}>Community wins, reforms, and civic news</Text>
+                  <Text style={styles.preferenceSubtitle}>
+                    Community wins, reforms, and civic news
+                  </Text>
                 </View>
                 <Switch
                   value={townNewsletter}
@@ -276,30 +281,18 @@ export default function NewsletterScreen() {
               </View>
             </View>
 
-            <Pressable
-              style={styles.primaryButton}
-              onPress={mode === 'manage' ? handleSavePreferences : handleSignUp}
-              disabled={loading}>
+            <Pressable style={styles.primaryButton} onPress={handleSignUp} disabled={loading}>
               {loading ? (
                 <ActivityIndicator color={Colors.white} />
               ) : (
-                <Text style={styles.primaryButtonText}>
-                  {mode === 'manage' ? 'Save preferences' : 'Sign up'}
-                </Text>
+                <Text style={styles.primaryButtonText}>Sign up</Text>
               )}
             </Pressable>
-
-            {mode === 'manage' ? (
-              <Pressable style={styles.secondaryButton} onPress={handleUnsubscribe} disabled={loading}>
-                <Text style={styles.secondaryButtonText}>Unsubscribe</Text>
-              </Pressable>
-            ) : null}
-          </>
+            <Pressable style={styles.skipButton} onPress={goChoose} disabled={loading}>
+              <Text style={styles.skipButtonText}>Back</Text>
+            </Pressable>
+          </View>
         ) : null}
-
-        <Pressable style={styles.skip} onPress={() => router.back()}>
-          <Text style={styles.skipText}>Continue without signing up</Text>
-        </Pressable>
       </KeyboardAwareScrollView>
 
       <WelcomeMemberModal
@@ -307,8 +300,15 @@ export default function NewsletterScreen() {
         memberName={welcomeName}
         onDismiss={() => {
           setShowWelcome(false);
-          router.back();
+          setShowAboutSetup(true);
         }}
+      />
+
+      <AboutYouSetupModal
+        visible={showAboutSetup}
+        memberName={welcomeName || newsletter?.full_name}
+        saving={savingAbout}
+        onComplete={handleAboutSetup}
       />
     </SafeAreaView>
   );
@@ -316,42 +316,59 @@ export default function NewsletterScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.background },
-  content: { padding: Spacing.lg, gap: Spacing.md },
+  content: { padding: Spacing.lg, gap: Spacing.lg },
   hero: {
-    backgroundColor: Colors.greenLight,
+    backgroundColor: Colors.primary,
     borderRadius: Radius.lg,
     padding: Spacing.lg,
     gap: Spacing.sm,
     alignItems: 'center',
   },
-  title: { fontSize: 22, fontWeight: '700', color: Colors.white },
-  subtitle: { fontSize: 14, color: 'rgba(255,255,255,0.75)', lineHeight: 20 },
-  tabs: {
-    flexDirection: 'row',
-    backgroundColor: Colors.card,
-    borderRadius: Radius.pill,
-    padding: 4,
+  title: {
+    fontSize: 22,
+    fontWeight: '800',
+    color: Colors.white,
+    textAlign: 'center',
   },
-  tab: { flex: 1, paddingVertical: 10, alignItems: 'center', borderRadius: Radius.pill },
-  tabActive: { backgroundColor: Colors.white },
-  tabText: { fontWeight: '600', color: Colors.textSecondary },
-  tabTextActive: { color: Colors.primary },
+  subtitle: {
+    fontSize: 14,
+    lineHeight: 20,
+    color: 'rgba(255,255,255,0.92)',
+    textAlign: 'center',
+  },
+  actions: {
+    gap: Spacing.sm,
+  },
+  form: {
+    gap: Spacing.md,
+  },
+  formTitle: {
+    fontSize: 20,
+    fontWeight: '800',
+    color: Colors.primaryDark,
+  },
+  formHint: {
+    marginTop: -8,
+    fontSize: 14,
+    lineHeight: 20,
+    color: Colors.textSecondary,
+  },
   input: {
     backgroundColor: Colors.white,
-    borderWidth: 1,
-    borderColor: Colors.border,
+    borderWidth: 1.5,
+    borderColor: Colors.primaryLight,
     borderRadius: Radius.md,
     paddingHorizontal: Spacing.md,
     paddingVertical: 14,
-    fontSize: 15,
+    fontSize: 16,
     color: Colors.text,
   },
   preferenceCard: {
     backgroundColor: Colors.white,
     borderRadius: Radius.lg,
     padding: Spacing.md,
-    borderWidth: 1,
-    borderColor: Colors.border,
+    borderWidth: 1.5,
+    borderColor: Colors.primaryLight,
   },
   preferenceRow: {
     flexDirection: 'row',
@@ -361,7 +378,12 @@ const styles = StyleSheet.create({
   },
   preferenceText: { flex: 1 },
   preferenceTitle: { fontSize: 15, fontWeight: '700', color: Colors.text },
-  preferenceSubtitle: { fontSize: 12, color: Colors.textSecondary, marginTop: 2, lineHeight: 16 },
+  preferenceSubtitle: {
+    fontSize: 12,
+    color: Colors.textSecondary,
+    marginTop: 2,
+    lineHeight: 16,
+  },
   divider: { height: 1, backgroundColor: Colors.border, marginVertical: Spacing.md },
   primaryButton: {
     backgroundColor: Colors.primary,
@@ -369,15 +391,27 @@ const styles = StyleSheet.create({
     paddingVertical: 16,
     alignItems: 'center',
   },
-  primaryButtonText: { color: Colors.white, fontWeight: '700', fontSize: 16 },
+  primaryButtonText: { color: Colors.white, fontWeight: '800', fontSize: 16 },
   secondaryButton: {
+    backgroundColor: Colors.white,
     borderRadius: Radius.pill,
-    paddingVertical: 14,
+    paddingVertical: 16,
     alignItems: 'center',
-    borderWidth: 1,
-    borderColor: Colors.red,
+    borderWidth: 1.5,
+    borderColor: Colors.primary,
   },
-  secondaryButtonText: { color: Colors.red, fontWeight: '700' },
-  skip: { alignItems: 'center', paddingVertical: Spacing.sm },
-  skipText: { color: 'rgba(255,255,255,0.7)', fontSize: 14 },
+  secondaryButtonText: {
+    color: Colors.primaryDark,
+    fontWeight: '800',
+    fontSize: 16,
+  },
+  skipButton: {
+    alignItems: 'center',
+    paddingVertical: Spacing.md,
+  },
+  skipButtonText: {
+    color: Colors.textSecondary,
+    fontSize: 15,
+    fontWeight: '600',
+  },
 });

@@ -1,13 +1,23 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-import { communityPosts as seedPosts, events as seedEvents, user as seedUser } from '@/constants/data';
+import { events as seedEvents } from '@/constants/data';
 import { evaluateBadges, EMPTY_BADGE_STATS, type VolunteerBadgeStats } from '@/lib/badges';
-import { getGuestId, getGuestProfile, updateGuestProfile } from '@/lib/guest';
-import { getCachedNewsletter, setCachedNewsletter } from '@/lib/newsletter';
+import { getGuestId, getGuestProfile, rotateGuestIdentity, setPendingAboutSetup, updateGuestProfile } from '@/lib/guest';
+import {
+  EMAIL_ALREADY_REGISTERED,
+  getCachedNewsletter,
+  setCachedNewsletter,
+} from '@/lib/newsletter';
 import { hoursFromDrives, isDrivePast } from '@/lib/volunteerHours';
+import { buildVolunteerCode, nextVolunteerSequenceForMonth } from '@/lib/volunteerCode';
 import { isLegacyVolunteerName, normalizeVolunteerName } from '@/lib/volunteerName';
 import { applyLocalLevelFields } from '@/lib/volunteerProfileMapper';
-import { presentLocalEmergencyNotification, presentLocalNewEventNotification } from '@/lib/pushNotifications';
+import {
+  buildNewEventNotification,
+  presentLocalEmergencyNotification,
+  presentLocalNewEventNotification,
+  sendExpoPushMessages,
+} from '@/lib/pushNotifications';
 import { normalizePhone } from '@/lib/phone';
 import { buildTownClock } from '@/lib/townTime';
 import { weekAgoIso } from '@/lib/townNews';
@@ -87,23 +97,8 @@ function parseEventDate(date: string, month: string, time: string) {
 }
 
 function createDefaultDb(): LocalDb {
-  const adminId = 'local-admin';
-  const profile: Profile = {
-    id: adminId,
-    full_name: seedUser.name,
-    email: seedUser.email,
-    tagline: seedUser.tagline,
-    role: 'admin',
-    interests: seedUser.interests,
-    skills: seedUser.skills,
-    availability: seedUser.availability,
-    hours_volunteered: seedUser.stats.hours,
-    events_joined: seedUser.stats.events,
-    reports_submitted: seedUser.stats.reports,
-  };
-
   return {
-    admins: [{ id: adminId, email: seedUser.email, password: 'towntherapy', profile }],
+    admins: [],
     reports: [],
     events: seedEvents.map((event, index) => ({
       id: `local-event-${index + 1}`,
@@ -115,19 +110,7 @@ function createDefaultDb(): LocalDb {
       image_url: event.image,
     })),
     rsvps: [],
-    posts: seedPosts.map((post, index) => ({
-      id: `local-post-${index + 1}`,
-      user_id: 'seed',
-      category: post.category,
-      title: post.title,
-      description: post.description,
-      featured: post.featured ?? false,
-      created_at: new Date(Date.now() - index * 86400000).toISOString(),
-      author_name: post.author,
-      author_initial: post.authorInitial,
-      likes: post.likes,
-      liked_by_me: false,
-    })),
+    posts: [],
     postLikes: [],
     unlockedBadges: [],
     newsletterSubscribers: [],
@@ -163,18 +146,38 @@ async function notifyVolunteersAboutEmergency(alert: EmergencyAlert) {
   }
 }
 
-async function notifyLocalSubscribersAboutEvent(event: Event) {
+async function notifyLocalDevicesAboutEvent(event: Event) {
   const db = await readDb();
-  const eligibleGuestIds = new Set(
-    db.newsletterSubscribers.filter((subscriber) => subscriber.event_updates).map((s) => s.guest_id)
-  );
-  const shouldNotify = db.pushTokens.some(
-    (token) => token.event_updates && eligibleGuestIds.has(token.guest_id)
-  );
+  const tokens = [
+    ...new Set(
+      db.pushTokens
+        .filter((token) => token.event_updates)
+        .map((token) => token.expo_push_token)
+        .filter(Boolean)
+    ),
+  ];
 
-  if (shouldNotify) {
-    await presentLocalNewEventNotification(event);
+  if (tokens.length) {
+    const content = buildNewEventNotification(event);
+    try {
+      await sendExpoPushMessages(
+        tokens.map((token) => ({
+          to: token,
+          title: content.title,
+          body: content.body,
+          data: content.data,
+          sound: 'default' as const,
+          channelId: 'events',
+          priority: 'high' as const,
+        }))
+      );
+      return;
+    } catch {
+      // Fall through to a local banner on this device.
+    }
   }
+
+  await presentLocalNewEventNotification(event);
 }
 
 async function writeDb(db: LocalDb) {
@@ -307,14 +310,10 @@ export const localApi = {
     return admin ? { user: admin.profile, session: { userId: admin.id } } : { user: null, session: null };
   },
 
-  async adminSignIn(email: string, password: string) {
-    const db = await readDb();
-    const admin = db.admins.find((a) => a.email === email && a.password === password);
-    if (!admin) throw new Error('Invalid admin email or password.');
-    if (admin.profile.role !== 'admin') throw new Error('Admin access only.');
-
-    await AsyncStorage.setItem(ADMIN_SESSION_KEY, admin.id);
-    return admin.profile;
+  async adminSignIn(_email: string, _password: string) {
+    throw new Error(
+      'Admin login requires Supabase. Configure EXPO_PUBLIC_SUPABASE_URL and EXPO_PUBLIC_SUPABASE_ANON_KEY.'
+    );
   },
 
   async adminSignOut() {
@@ -618,6 +617,7 @@ export const localApi = {
     const db = await readDb();
     const subscription = db.newsletterSubscribers.find((s) => s.guest_id === guestId) ?? null;
     if (!subscription) return null;
+
     const leveled = applyLocalLevelFields({
       ...subscription,
       full_name: normalizeVolunteerName(subscription.full_name),
@@ -626,57 +626,93 @@ export const localApi = {
     return leveled;
   },
 
+  async completeAboutYouOnboarding(
+    guestId: string,
+    input: {
+      bio: string;
+      interests: string;
+      skills: string;
+      availability: string;
+    }
+  ) {
+    const profile = await localApi.updateVolunteerProfile(input);
+    const db = await readDb();
+    let subscription = db.newsletterSubscribers.find((s) => s.guest_id === guestId) ?? null;
+    if (!subscription) {
+      throw new Error('Volunteer profile not found. Sign up again.');
+    }
+
+    subscription = {
+      ...subscription,
+      bio: input.bio,
+      cause: input.interests,
+      skills: input.skills,
+      availability: input.availability,
+    };
+
+    if (!subscription.volunteer_code) {
+      const joinedAt = new Date(subscription.subscribed_at || Date.now());
+      subscription = {
+        ...subscription,
+        volunteer_code: buildVolunteerCode({
+          fullName: subscription.full_name,
+          joinedAt,
+          sequence: nextVolunteerSequenceForMonth(
+            db.newsletterSubscribers.map((s) => s.volunteer_code),
+            joinedAt
+          ),
+        }),
+      };
+    }
+
+    const leveled = applyLocalLevelFields(subscription);
+    db.newsletterSubscribers = db.newsletterSubscribers.map((s) =>
+      s.id === leveled.id ? leveled : s
+    );
+    await writeDb(db);
+    await setCachedNewsletter(leveled);
+    await setPendingAboutSetup(false);
+    return { profile, newsletter: leveled };
+  },
+
   async newsletterSignUp(guestId: string, input: NewsletterSignupInput) {
     const db = await readDb();
     const email = input.email.trim().toLowerCase();
     const existing = db.newsletterSubscribers.find((s) => s.email === email);
-    const guestProfile = await getGuestProfile();
-    const events = db.rsvps.filter((r) => r.guest_id === guestId && Boolean(r.completed_at)).length;
-    const reports = db.reports.filter(
-      (r) => r.guest_id === guestId || r.user_id === guestId
-    ).length;
+    if (existing) {
+      throw new Error(EMAIL_ALREADY_REGISTERED);
+    }
 
-    const subscription: NewsletterSubscription = existing
-      ? {
-          ...existing,
-          guest_id: guestId,
-          full_name: normalizeVolunteerName(input.full_name.trim()),
-          event_updates: input.event_updates,
-          town_newsletter: input.town_newsletter,
-          events_attended: events,
-          reports_flagged: reports,
-          hours_volunteered: hoursFromDrives(events),
-          bio: guestProfile.bio || existing.bio || '',
-          cause: guestProfile.interests || existing.cause || '',
-          skills: guestProfile.skills || existing.skills || '',
-          availability: guestProfile.availability || existing.availability || '',
-        }
-      : {
-          id: createId('newsletter'),
-          email,
-          full_name: normalizeVolunteerName(input.full_name.trim()),
-          guest_id: guestId,
-          event_updates: input.event_updates,
-          town_newsletter: input.town_newsletter,
-          events_attended: events,
-          reports_flagged: reports,
-          hours_volunteered: hoursFromDrives(events),
-          bio: guestProfile.bio ?? '',
-          cause: guestProfile.interests ?? '',
-          skills: guestProfile.skills ?? '',
-          availability: guestProfile.availability ?? '',
-          subscribed_at: new Date().toISOString(),
-        };
+    // Unlink prior account on this device and start a clean identity.
+    db.newsletterSubscribers = db.newsletterSubscribers.map((s) =>
+      s.guest_id === guestId ? { ...s, guest_id: '' } : s
+    );
+    db.pushTokens = db.pushTokens.filter((token) => token.guest_id !== guestId);
+    const freshGuestId = await rotateGuestIdentity();
+
+    const joinedAt = new Date();
+    const fullName = normalizeVolunteerName(input.full_name.trim());
+
+    const subscription: NewsletterSubscription = {
+      id: createId('newsletter'),
+      email,
+      full_name: fullName,
+      guest_id: freshGuestId,
+      volunteer_code: null,
+      event_updates: input.event_updates,
+      town_newsletter: input.town_newsletter,
+      events_attended: 0,
+      reports_flagged: 0,
+      hours_volunteered: 0,
+      bio: '',
+      cause: '',
+      skills: '',
+      availability: '',
+      subscribed_at: joinedAt.toISOString(),
+    };
 
     const leveled = applyLocalLevelFields(subscription);
-
-    if (existing) {
-      db.newsletterSubscribers = db.newsletterSubscribers.map((s) =>
-        s.email === email ? leveled : s
-      );
-    } else {
-      db.newsletterSubscribers.push(leveled);
-    }
+    db.newsletterSubscribers.push(leveled);
 
     await writeDb(db);
     await setCachedNewsletter(leveled);
@@ -684,8 +720,16 @@ export const localApi = {
       full_name: leveled.full_name,
       registered: true,
       tagline: 'Supporter of Hazaribagh — rising through the ranks.',
+      events_joined: 0,
+      reports_submitted: 0,
+      hours_volunteered: 0,
+      bio: '',
+      interests: '',
+      skills: '',
+      availability: '',
     });
-    return leveled;
+    await setPendingAboutSetup(true);
+    return { subscription: leveled, guestId: freshGuestId };
   },
 
   async newsletterSignIn(guestId: string, email: string) {
@@ -758,11 +802,16 @@ export const localApi = {
 
   async newsletterUnsubscribe(guestId: string) {
     const db = await readDb();
-    db.newsletterSubscribers = db.newsletterSubscribers.filter((s) => s.guest_id !== guestId);
+    // Soft sign-out: keep the email row so they can sign in again.
+    db.newsletterSubscribers = db.newsletterSubscribers.map((s) =>
+      s.guest_id === guestId ? { ...s, guest_id: '' } : s
+    );
     db.pushTokens = db.pushTokens.filter((token) => token.guest_id !== guestId);
     await writeDb(db);
     await setCachedNewsletter(null);
-    await updateGuestProfile({ registered: false });
+    await setPendingAboutSetup(false);
+    const freshGuestId = await rotateGuestIdentity();
+    return { guestId: freshGuestId };
   },
 
   async takeVolunteerBreak(guestId: string, input: TakeVolunteerBreakInput) {
@@ -884,7 +933,7 @@ export const localApi = {
     await writeDb(db);
 
     const event = formatEvent(db, eventRow, null);
-    await notifyLocalSubscribersAboutEvent(event);
+    await notifyLocalDevicesAboutEvent(event);
     return event;
   },
 

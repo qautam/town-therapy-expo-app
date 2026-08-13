@@ -60,6 +60,7 @@ select
   ns.email,
   ns.full_name,
   ns.guest_id,
+  ns.volunteer_code,
   ns.event_updates,
   ns.town_newsletter,
   ns.events_attended,

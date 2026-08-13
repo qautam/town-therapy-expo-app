@@ -221,6 +221,8 @@ export type NewsletterSubscription = {
   email: string;
   full_name: string;
   guest_id: string;
+  /** Public ID: TT-HZB-{L}{M}{YY}{NNN} e.g. TT-HZB-P826001. */
+  volunteer_code?: string | null;
   event_updates: boolean;
   town_newsletter: boolean;
   events_attended: number;

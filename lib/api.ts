@@ -9,13 +9,19 @@ import {
 } from '@/lib/emergencyContactCodec';
 import { redactEmergencyPhoneList, redactEmergencyPhones } from '@/lib/emergencyPrivacy';
 import { getErrorMessage, isMissingColumnError, toError } from '@/lib/errors';
-import { getGuestId, getGuestProfile, updateGuestProfile } from '@/lib/guest';
-import { getCachedNewsletter, setCachedNewsletter } from '@/lib/newsletter';
+import { getGuestId, getGuestProfile, rotateGuestIdentity, setPendingAboutSetup, updateGuestProfile } from '@/lib/guest';
+import {
+  EMAIL_ALREADY_REGISTERED,
+  getCachedNewsletter,
+  setCachedNewsletter,
+} from '@/lib/newsletter';
 import { localApi } from '@/lib/localStore';
 import { normalizePhone } from '@/lib/phone';
 import { cacheGetStale, cacheInvalidate, cacheReplace, cacheSet } from '@/lib/queryCache';
 import { getSupabase, REPORT_PHOTOS_BUCKET } from '@/lib/supabase';
+import { volunteerHasSkill } from '@/constants/volunteerProfile';
 import { hoursFromDrives } from '@/lib/volunteerHours';
+import { buildVolunteerCode, nextVolunteerSequenceForMonth } from '@/lib/volunteerCode';
 import { isLegacyVolunteerName, normalizeVolunteerName } from '@/lib/volunteerName';
 import { buildTownClock, type TownClock } from '@/lib/townTime';
 import { weekAgoIso } from '@/lib/townNews';
@@ -221,6 +227,7 @@ function mapVolunteerProfileRow(row: Record<string, unknown>): NewsletterSubscri
     email: row.email as string,
     full_name: normalizeVolunteerName(String(row.full_name ?? '')),
     guest_id: row.guest_id as string,
+    volunteer_code: (row.volunteer_code as string | null | undefined) ?? null,
     event_updates: row.event_updates as boolean,
     town_newsletter: row.town_newsletter as boolean,
     events_attended: eventsAttended,
@@ -245,6 +252,46 @@ function mapVolunteerProfileRow(row: Record<string, unknown>): NewsletterSubscri
     subscribed_at: row.subscribed_at as string,
     updated_at: row.updated_at as string,
   };
+}
+
+async function allocateVolunteerCode(input: {
+  fullName: string;
+  joinedAt: Date;
+}): Promise<string> {
+  const supabase = getSupabase()!;
+  const joinedAt = input.joinedAt;
+  const { data: codes } = await supabase
+    .from('newsletter_subscribers')
+    .select('volunteer_code')
+    .like('volunteer_code', 'TT-HZB-%');
+  return buildVolunteerCode({
+    fullName: input.fullName,
+    joinedAt,
+    sequence: nextVolunteerSequenceForMonth(
+      (codes ?? []).map((row) => row.volunteer_code as string | null),
+      joinedAt
+    ),
+  });
+}
+
+/** Assign a public volunteer ID if an older row is missing one. */
+async function ensureVolunteerCode(
+  subscription: NewsletterSubscription
+): Promise<NewsletterSubscription | null> {
+  if (subscription.volunteer_code) return subscription;
+  const supabase = getSupabase()!;
+  const code = await allocateVolunteerCode({
+    fullName: subscription.full_name,
+    joinedAt: new Date(subscription.subscribed_at || Date.now()),
+  });
+  const { data, error } = await supabase
+    .from('newsletter_subscribers')
+    .update({ volunteer_code: code })
+    .eq('id', subscription.id)
+    .select('*')
+    .maybeSingle();
+  if (error || !data) return { ...subscription, volunteer_code: code };
+  return mapVolunteerProfileRow(data as Record<string, unknown>);
 }
 
 async function fetchVolunteerProfileRow(guestId: string) {
@@ -680,6 +727,41 @@ async function fetchEmergencyAlertRows(options?: {
   );
 }
 
+async function notifyDevicesAboutNewEvent(event: Event) {
+  try {
+    const supabase = getSupabase();
+    if (!supabase) return;
+
+    // Every device that registered for event alerts — not only newsletter signups.
+    const { data: tokens, error } = await supabase
+      .from('push_tokens')
+      .select('expo_push_token')
+      .eq('event_updates', true);
+
+    if (error || !tokens?.length) return;
+
+    const { buildNewEventNotification, sendExpoPushMessages } = await import(
+      '@/lib/pushNotifications'
+    );
+    const content = buildNewEventNotification(event);
+    const uniqueTokens = [...new Set(tokens.map((row) => row.expo_push_token).filter(Boolean))];
+
+    await sendExpoPushMessages(
+      uniqueTokens.map((token) => ({
+        to: token,
+        title: content.title,
+        body: content.body,
+        data: content.data,
+        sound: 'default' as const,
+        channelId: 'events',
+        priority: 'high' as const,
+      }))
+    );
+  } catch {
+    // Best-effort — never block publish on push delivery.
+  }
+}
+
 async function notifyVolunteersAboutEmergencyCloud(alert: EmergencyAlert) {
   try {
     const supabase = getSupabase();
@@ -853,6 +935,36 @@ export const api = {
     }
 
     return updated;
+  },
+
+  /**
+   * First-time About You: save bio/details and mint the public volunteer ID once.
+   * Later profile edits use updateVolunteerProfile and never reissue the code.
+   */
+  async completeAboutYouOnboarding(
+    guestId: string,
+    input: {
+      bio: string;
+      interests: string;
+      skills: string;
+      availability: string;
+    }
+  ) {
+    if (!isSupabaseConfigured) {
+      return localApi.completeAboutYouOnboarding(guestId, input);
+    }
+
+    const updated = await api.updateVolunteerProfile(input);
+    let subscription = await fetchVolunteerProfileRow(guestId);
+    if (!subscription) {
+      throw new Error('Volunteer profile not found. Sign up again.');
+    }
+    if (!subscription.volunteer_code) {
+      subscription = (await ensureVolunteerCode(subscription)) ?? subscription;
+      await setCachedNewsletter(subscription);
+    }
+    await setPendingAboutSetup(false);
+    return { profile: updated, newsletter: subscription };
   },
 
   async getDashboardStats(): Promise<DashboardStats> {
@@ -1231,10 +1343,9 @@ export const api = {
 
     const event = formatEventRow(data, 0, false);
 
-    // Best-effort push — never block publish on edge function / network
-    void supabase.functions.invoke('notify-new-event', {
-      body: { event_id: data.id },
-    });
+    // Push from the publishing device (same pattern as SOS) so every registered
+    // phone gets the alert. Avoids depending on the notify-new-event edge function.
+    void notifyDevicesAboutNewEvent(event);
 
     return event;
   },
@@ -1892,62 +2003,76 @@ export const api = {
   async newsletterSignUp(guestId: string, input: NewsletterSignupInput) {
     if (!isSupabaseConfigured) return localApi.newsletterSignUp(guestId, input);
 
-    const guestProfile = await localApi.getVolunteerProfile();
     const supabase = getSupabase()!;
     const email = input.email.trim().toLowerCase();
 
     const { data: existing } = await supabase
       .from('newsletter_subscribers')
-      .select('guest_id, bio, cause, skills, availability')
+      .select('guest_id')
       .eq('email', email)
       .maybeSingle();
 
-    if (existing?.guest_id) {
-      await reassignVolunteerActivity(existing.guest_id, guestId);
+    if (existing) {
+      throw new Error(EMAIL_ALREADY_REGISTERED);
     }
 
-    const { events, reports } = await recountVolunteerActivity(guestId);
-    const hoursVolunteered = hoursFromDrives(events);
+    // Unlink any prior volunteer still attached to this device, then start a clean identity
+    // so drives/hours/About You from the previous account do not carry over.
+    await supabase.from('newsletter_subscribers').update({ guest_id: null }).eq('guest_id', guestId);
+    await supabase.from('push_tokens').delete().eq('guest_id', guestId);
+    const freshGuestId = await rotateGuestIdentity();
 
     const payload = {
       email,
       full_name: input.full_name.trim(),
-      guest_id: guestId,
+      guest_id: freshGuestId,
       event_updates: input.event_updates,
       town_newsletter: input.town_newsletter,
-      events_attended: events,
-      reports_flagged: reports,
-      hours_volunteered: hoursVolunteered,
-      bio: guestProfile.bio || existing?.bio || '',
-      cause: guestProfile.interests || existing?.cause || '',
-      skills: guestProfile.skills || existing?.skills || '',
-      availability: guestProfile.availability || existing?.availability || '',
+      events_attended: 0,
+      reports_flagged: 0,
+      hours_volunteered: 0,
+      bio: '',
+      cause: '',
+      skills: '',
+      availability: '',
     };
 
     const { data, error } = await supabase
       .from('newsletter_subscribers')
-      .upsert(payload, { onConflict: 'email' })
+      .insert(payload)
       .select('*')
       .single();
 
-    if (error) throw error;
+    if (error) {
+      // Unique email race / constraint — treat as already registered.
+      if (error.code === '23505' && error.message?.includes('email')) {
+        throw new Error(EMAIL_ALREADY_REGISTERED);
+      }
+      if (error.code === '23505') {
+        throw new Error(EMAIL_ALREADY_REGISTERED);
+      }
+      throw error;
+    }
 
-    const subscription =
-      (await syncVolunteerStatsFromActivity(guestId)) ??
-      applyLocalLevelFields({
-        ...(data as NewsletterSubscription),
-        hours_volunteered: hoursVolunteered,
-      });
+    const subscription = applyLocalLevelFields({
+      ...(data as NewsletterSubscription),
+      hours_volunteered: 0,
+    });
     await setCachedNewsletter(subscription);
-    await localApi.updateVolunteerProfile({
+    await updateGuestProfile({
       full_name: subscription.full_name,
       registered: true,
       tagline: 'Supporter of Hazaribagh — rising through the ranks.',
-      events_joined: subscription.events_attended,
-      reports_submitted: subscription.reports_flagged,
-      hours_volunteered: subscription.hours_volunteered ?? hoursVolunteered,
+      events_joined: 0,
+      reports_submitted: 0,
+      hours_volunteered: 0,
+      bio: '',
+      interests: '',
+      skills: '',
+      availability: '',
     });
-    return subscription;
+    await setPendingAboutSetup(true);
+    return { subscription, guestId: freshGuestId };
   },
 
   async newsletterSignIn(guestId: string, email: string) {
@@ -2013,11 +2138,20 @@ export const api = {
   async newsletterUnsubscribe(guestId: string) {
     if (!isSupabaseConfigured) return localApi.newsletterUnsubscribe(guestId);
 
+    // Soft sign-out: keep the email account so they can sign in again later.
+    // Unlink this device, then rotate guest identity so the next signup starts clean.
     const supabase = getSupabase()!;
-    const { error } = await supabase.from('newsletter_subscribers').delete().eq('guest_id', guestId);
+    const { error } = await supabase
+      .from('newsletter_subscribers')
+      .update({ guest_id: null })
+      .eq('guest_id', guestId);
     if (error) throw error;
+
+    await supabase.from('push_tokens').delete().eq('guest_id', guestId);
     await setCachedNewsletter(null);
-    await updateGuestProfile({ registered: false });
+    await setPendingAboutSetup(false);
+    const freshGuestId = await rotateGuestIdentity();
+    return { guestId: freshGuestId };
   },
 
   async takeVolunteerBreak(guestId: string, input: TakeVolunteerBreakInput) {
@@ -2096,12 +2230,9 @@ export const api = {
 
   async listVolunteersBySkill(skill?: string | null): Promise<VolunteerDirectoryEntry[]> {
     const contacts = await api.listVolunteerContacts();
-    const needle = skill?.trim().toLowerCase() ?? '';
+    const needle = skill?.trim() ?? '';
     return contacts
-      .filter((contact) => {
-        if (!needle) return Boolean(contact.skills?.trim());
-        return (contact.skills ?? '').trim().toLowerCase() === needle;
-      })
+      .filter((contact) => volunteerHasSkill(contact.skills, needle))
       .map((contact) => ({
         guest_id: contact.guest_id ?? '',
         email: contact.email,
@@ -2156,12 +2287,3 @@ export function formatEventDateParts(startsAt: string) {
   };
 }
 
-export function formatPostTimestamp(iso: string) {
-  const date = new Date(iso);
-  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-  const hours = date.getHours();
-  const minutes = date.getMinutes().toString().padStart(2, '0');
-  const ampm = hours >= 12 ? 'PM' : 'AM';
-  const hour12 = hours % 12 || 12;
-  return `${months[date.getMonth()]} ${date.getDate()} · ${hour12}:${minutes} ${ampm}`;
-}

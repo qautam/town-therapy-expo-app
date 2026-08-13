@@ -27,8 +27,8 @@ export function TownAlertModal({ alert, onDismiss }: Props) {
 
   const run = (button: TownAlertButton) => {
     onDismiss();
-    // Defer so the modal can close before the next action opens another prompt.
-    requestAnimationFrame(() => button.onPress?.());
+    // Defer so the modal can fully close before the next alert/modal opens.
+    setTimeout(() => button.onPress?.(), 280);
   };
 
   return (

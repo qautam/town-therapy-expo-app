@@ -6,6 +6,7 @@ import type { UpdateProfileInput } from '@/types/database';
 
 const GUEST_ID_KEY = '@town_therapy_guest_id';
 const GUEST_PROFILE_KEY = '@town_therapy_guest_profile';
+const PENDING_ABOUT_SETUP_KEY = '@town_therapy_pending_about_setup';
 
 export type GuestProfile = {
   full_name: string;
@@ -33,13 +34,40 @@ const defaultGuestProfile = (): GuestProfile => ({
   hours_volunteered: 0,
 });
 
+function createGuestId() {
+  return `guest-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+}
+
 export async function getGuestId(): Promise<string> {
   const existing = await AsyncStorage.getItem(GUEST_ID_KEY);
   if (existing) return existing;
 
-  const guestId = `guest-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+  const guestId = createGuestId();
   await AsyncStorage.setItem(GUEST_ID_KEY, guestId);
   return guestId;
+}
+
+/**
+ * Issue a fresh device identity after sign-out / before a brand-new signup,
+ * so prior drives, hours, and About You details do not bleed into the next account.
+ */
+export async function rotateGuestIdentity(): Promise<string> {
+  const guestId = createGuestId();
+  await AsyncStorage.setItem(GUEST_ID_KEY, guestId);
+  await AsyncStorage.setItem(GUEST_PROFILE_KEY, JSON.stringify(defaultGuestProfile()));
+  return guestId;
+}
+
+export async function getPendingAboutSetup(): Promise<boolean> {
+  return (await AsyncStorage.getItem(PENDING_ABOUT_SETUP_KEY)) === '1';
+}
+
+export async function setPendingAboutSetup(pending: boolean): Promise<void> {
+  if (pending) {
+    await AsyncStorage.setItem(PENDING_ABOUT_SETUP_KEY, '1');
+  } else {
+    await AsyncStorage.removeItem(PENDING_ABOUT_SETUP_KEY);
+  }
 }
 
 export async function getGuestProfile(): Promise<GuestProfile> {
