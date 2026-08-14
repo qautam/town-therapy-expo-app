@@ -48,9 +48,11 @@ export function isMissingColumnError(error: unknown, column?: string) {
     return message.includes(column.toLowerCase());
   }
 
-  if (!column) {
-    return message.includes('does not exist') && message.includes('column');
-  }
+  const looksMissing =
+    (message.includes('does not exist') && message.includes('column')) ||
+    message.includes('could not find the') ||
+    message.includes('schema cache');
 
-  return message.includes('does not exist') && message.includes(column.toLowerCase());
+  if (!column) return looksMissing;
+  return looksMissing && message.includes(column.toLowerCase());
 }

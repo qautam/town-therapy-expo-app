@@ -74,6 +74,8 @@ import {
 
 const REPORTS_CACHE_TTL_MS = 60_000;
 
+let reportsSeveritySupported: boolean | null = null;
+
 function normalizeReportRow(row: Report & { guest_id?: string }, guestId?: string): Report {
   return {
     ...row,
@@ -86,6 +88,64 @@ function afterReportCreated(guestId: string, report: Report) {
   const existing = cacheGetStale<Report[]>(key)?.value ?? [];
   const merged = [report, ...existing.filter((item) => item.id !== report.id)];
   cacheReplace(key, merged, REPORTS_CACHE_TTL_MS);
+}
+
+function buildReportInsertPayload(
+  guestId: string,
+  reporterName: string,
+  input: CreateReportInput,
+  photoUrl: string | null,
+  withSeverity: boolean
+) {
+  const payload: Record<string, unknown> = {
+    guest_id: guestId,
+    reporter_name: reporterName,
+    title: input.title,
+    description: input.description,
+    category: input.category,
+    location_label: input.location_label,
+    latitude: input.latitude,
+    longitude: input.longitude,
+    photo_url: photoUrl,
+  };
+  if (withSeverity) {
+    payload.severity = input.severity ?? 'moderate';
+  }
+  return payload;
+}
+
+async function insertCloudReport(
+  guestId: string,
+  reporterName: string,
+  input: CreateReportInput,
+  photoUrl: string | null
+) {
+  const supabase = getSupabase()!;
+  let useSeverity = reportsSeveritySupported !== false;
+
+  const run = (withSeverity: boolean) =>
+    supabase
+      .from('reports')
+      .insert(buildReportInsertPayload(guestId, reporterName, input, photoUrl, withSeverity))
+      .select('*')
+      .single();
+
+  let { data, error } = await run(useSeverity);
+
+  if (error && useSeverity && isMissingColumnError(error, 'severity')) {
+    reportsSeveritySupported = false;
+    ({ data, error } = await run(false));
+  } else if (!error && useSeverity) {
+    reportsSeveritySupported = true;
+  }
+
+  if (error) {
+    throw toError(error, 'Could not submit your report. Check your connection and try again.');
+  }
+  if (!data) {
+    throw new Error('Could not submit your report. Check your connection and try again.');
+  }
+  return data as Report;
 }
 
 function formatEventRow(
@@ -1146,10 +1206,17 @@ export const api = {
 
   async createReport(guestId: string, input: CreateReportInput) {
     const guest = await localApi.getVolunteerProfile();
+    const reporterName = guest.full_name.trim() || 'Citizen';
     let photoUrl = input.photo_uri ?? null;
 
     if (isSupabaseConfigured && input.photo_uri) {
-      photoUrl = await uploadReportPhoto(guestId, input.photo_uri);
+      try {
+        photoUrl = await uploadReportPhoto(guestId, input.photo_uri);
+      } catch (error) {
+        // Don't block the civic report if storage isn't set up or the file can't be read.
+        console.warn('Report photo upload failed:', error);
+        photoUrl = null;
+      }
     }
 
     if (!isSupabaseConfigured) {
@@ -1159,28 +1226,16 @@ export const api = {
       return report;
     }
 
-    const supabase = getSupabase()!;
-    const { data, error } = await supabase
-      .from('reports')
-      .insert({
-        guest_id: guestId,
-        reporter_name: guest.full_name,
-        title: input.title,
-        description: input.description,
-        category: input.category,
-        severity: input.severity ?? 'moderate',
-        location_label: input.location_label,
-        latitude: input.latitude,
-        longitude: input.longitude,
-        photo_url: photoUrl,
-      })
-      .select('*')
-      .single();
+    const data = await insertCloudReport(guestId, reporterName, input, photoUrl);
 
-    if (error) throw error;
-    await syncVolunteerStatsFromActivity(guestId);
+    try {
+      await syncVolunteerStatsFromActivity(guestId);
+    } catch (error) {
+      console.warn('Could not sync volunteer stats after report:', getErrorMessage(error));
+    }
+
     const report = normalizeReportRow(
-      { ...(data as Report), author_name: guest.full_name },
+      { ...data, author_name: reporterName },
       guestId
     );
     afterReportCreated(guestId, report);
