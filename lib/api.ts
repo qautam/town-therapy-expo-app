@@ -1,6 +1,7 @@
 import { decode as decodeBase64 } from 'base64-arraybuffer';
 import * as FileSystem from 'expo-file-system/legacy';
 
+import { alternateAdminEmail, isInvalidCredentialMessage, normalizeAdminEmail } from '@/lib/adminCredentials';
 import { isSupabaseConfigured } from '@/lib/config';
 import {
   buildSosMessage,
@@ -73,6 +74,8 @@ import {
 
 const REPORTS_CACHE_TTL_MS = 60_000;
 
+let reportsSeveritySupported: boolean | null = null;
+
 function normalizeReportRow(row: Report & { guest_id?: string }, guestId?: string): Report {
   return {
     ...row,
@@ -85,6 +88,64 @@ function afterReportCreated(guestId: string, report: Report) {
   const existing = cacheGetStale<Report[]>(key)?.value ?? [];
   const merged = [report, ...existing.filter((item) => item.id !== report.id)];
   cacheReplace(key, merged, REPORTS_CACHE_TTL_MS);
+}
+
+function buildReportInsertPayload(
+  guestId: string,
+  reporterName: string,
+  input: CreateReportInput,
+  photoUrl: string | null,
+  withSeverity: boolean
+) {
+  const payload: Record<string, unknown> = {
+    guest_id: guestId,
+    reporter_name: reporterName,
+    title: input.title,
+    description: input.description,
+    category: input.category,
+    location_label: input.location_label,
+    latitude: input.latitude,
+    longitude: input.longitude,
+    photo_url: photoUrl,
+  };
+  if (withSeverity) {
+    payload.severity = input.severity ?? 'moderate';
+  }
+  return payload;
+}
+
+async function insertCloudReport(
+  guestId: string,
+  reporterName: string,
+  input: CreateReportInput,
+  photoUrl: string | null
+) {
+  const supabase = getSupabase()!;
+  let useSeverity = reportsSeveritySupported !== false;
+
+  const run = (withSeverity: boolean) =>
+    supabase
+      .from('reports')
+      .insert(buildReportInsertPayload(guestId, reporterName, input, photoUrl, withSeverity))
+      .select('*')
+      .single();
+
+  let { data, error } = await run(useSeverity);
+
+  if (error && useSeverity && isMissingColumnError(error, 'severity')) {
+    reportsSeveritySupported = false;
+    ({ data, error } = await run(false));
+  } else if (!error && useSeverity) {
+    reportsSeveritySupported = true;
+  }
+
+  if (error) {
+    throw toError(error, 'Could not submit your report. Check your connection and try again.');
+  }
+  if (!data) {
+    throw new Error('Could not submit your report. Check your connection and try again.');
+  }
+  return data as Report;
 }
 
 function formatEventRow(
@@ -845,6 +906,86 @@ async function notifyRequesterHelpOnWay(alert: EmergencyAlert) {
   }
 }
 
+function mapAdminSignInError(error: unknown) {
+  const message = getErrorMessage(error, 'Admin login failed. Try again.');
+  const lower = message.toLowerCase();
+  if (lower.includes('email not confirmed')) {
+    return new Error(
+      'Email not confirmed. In Supabase: Authentication → Users → open the admin → Confirm user. Or run supabase/confirm-admin.sql.'
+    );
+  }
+  if (isInvalidCredentialMessage(message)) {
+    return new Error('Wrong admin email or password.');
+  }
+  return toError(error, 'Admin login failed. Try again.');
+}
+
+async function loadOrCreateAdminProfile(user: {
+  id: string;
+  email?: string | null;
+  user_metadata?: Record<string, unknown> | null;
+}): Promise<Profile> {
+  const supabase = getSupabase()!;
+  const { data: profile, error: profileError } = await supabase
+    .from('profiles')
+    .select('*')
+    .eq('id', user.id)
+    .maybeSingle();
+
+  if (profile?.role === 'admin') return profile as Profile;
+  if (profile && profile.role !== 'admin') {
+    await supabase.auth.signOut();
+    throw new Error('Admin access only.');
+  }
+
+  const fullName =
+    (typeof user.user_metadata?.full_name === 'string' && user.user_metadata.full_name.trim()) ||
+    'Town Admin';
+
+  const { data: created } = await supabase
+    .from('profiles')
+    .insert({
+      id: user.id,
+      email: user.email ?? null,
+      full_name: fullName,
+      role: 'admin',
+    })
+    .select('*')
+    .maybeSingle();
+
+  if (created?.role === 'admin') return created as Profile;
+
+  if (profileError) {
+    throw new Error(
+      `Admin profile is missing (${profileError.message}). Run supabase/confirm-admin.sql in the Supabase SQL Editor, then try again.`
+    );
+  }
+
+  throw new Error(
+    'Admin profile is missing. Run supabase/confirm-admin.sql in the Supabase SQL Editor, then try again.'
+  );
+}
+
+async function signInAdminWithPassword(email: string, password: string) {
+  const supabase = getSupabase()!;
+  const primaryEmail = normalizeAdminEmail(email);
+  const { data, error } = await supabase.auth.signInWithPassword({
+    email: primaryEmail,
+    password,
+  });
+  if (!error && data.user) return data;
+
+  const alias = alternateAdminEmail(primaryEmail);
+  if (alias && error && isInvalidCredentialMessage(error.message)) {
+    const retry = await supabase.auth.signInWithPassword({ email: alias, password });
+    if (!retry.error && retry.data.user) return retry.data;
+    if (retry.error) throw mapAdminSignInError(retry.error);
+  }
+
+  if (error) throw mapAdminSignInError(error);
+  throw new Error('Admin login failed. Try again.');
+}
+
 export const api = {
   getGuestId,
 
@@ -857,45 +998,25 @@ export const api = {
 
     const supabase = getSupabase()!;
     const { data: sessionData } = await supabase.auth.getSession();
-    const userId = sessionData.session?.user.id;
-    if (!userId) return { user: null, session: null };
+    const user = sessionData.session?.user;
+    if (!user?.id) return { user: null, session: null };
 
-    const { data: profile } = await supabase.from('profiles').select('*').eq('id', userId).single();
-    if (!profile || profile.role !== 'admin') {
-      await supabase.auth.signOut();
-      return { user: null, session: null };
+    try {
+      const profile = await loadOrCreateAdminProfile(user);
+      return { user: profile, session: { userId: user.id } };
+    } catch (error) {
+      // Don't sign out on a missing/unreadable profile — that was wiping a successful login.
+      console.warn('Could not restore admin session:', getErrorMessage(error));
+      return { user: null, session: { userId: user.id } };
     }
-
-    return { user: profile as Profile, session: { userId } };
   },
 
   async adminSignIn(email: string, password: string) {
     if (!isSupabaseConfigured) return localApi.adminSignIn(email, password);
 
-    const supabase = getSupabase()!;
-    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-    if (error) {
-      if (error.message.toLowerCase().includes('email not confirmed')) {
-        throw new Error(
-          'Email not confirmed. In Supabase: Authentication → Users → open the admin → Confirm user. Or run supabase/confirm-admin.sql.'
-        );
-      }
-      throw error;
-    }
-
-    const { data: profile, error: profileError } = await supabase
-      .from('profiles')
-      .select('*')
-      .eq('id', data.user.id)
-      .single();
-
-    if (profileError || !profile) throw new Error('Profile not found.');
-    if (profile.role !== 'admin') {
-      await supabase.auth.signOut();
-      throw new Error('Admin access only.');
-    }
-
-    return profile as Profile;
+    const data = await signInAdminWithPassword(email, password.trim());
+    if (!data.user) throw new Error('Admin login failed. Try again.');
+    return loadOrCreateAdminProfile(data.user);
   },
 
   async adminSignOut() {
@@ -1085,10 +1206,17 @@ export const api = {
 
   async createReport(guestId: string, input: CreateReportInput) {
     const guest = await localApi.getVolunteerProfile();
+    const reporterName = guest.full_name.trim() || 'Citizen';
     let photoUrl = input.photo_uri ?? null;
 
     if (isSupabaseConfigured && input.photo_uri) {
-      photoUrl = await uploadReportPhoto(guestId, input.photo_uri);
+      try {
+        photoUrl = await uploadReportPhoto(guestId, input.photo_uri);
+      } catch (error) {
+        // Don't block the civic report if storage isn't set up or the file can't be read.
+        console.warn('Report photo upload failed:', error);
+        photoUrl = null;
+      }
     }
 
     if (!isSupabaseConfigured) {
@@ -1098,28 +1226,16 @@ export const api = {
       return report;
     }
 
-    const supabase = getSupabase()!;
-    const { data, error } = await supabase
-      .from('reports')
-      .insert({
-        guest_id: guestId,
-        reporter_name: guest.full_name,
-        title: input.title,
-        description: input.description,
-        category: input.category,
-        severity: input.severity ?? 'moderate',
-        location_label: input.location_label,
-        latitude: input.latitude,
-        longitude: input.longitude,
-        photo_url: photoUrl,
-      })
-      .select('*')
-      .single();
+    const data = await insertCloudReport(guestId, reporterName, input, photoUrl);
 
-    if (error) throw error;
-    await syncVolunteerStatsFromActivity(guestId);
+    try {
+      await syncVolunteerStatsFromActivity(guestId);
+    } catch (error) {
+      console.warn('Could not sync volunteer stats after report:', getErrorMessage(error));
+    }
+
     const report = normalizeReportRow(
-      { ...(data as Report), author_name: guest.full_name },
+      { ...data, author_name: reporterName },
       guestId
     );
     afterReportCreated(guestId, report);

@@ -20,6 +20,7 @@ import { useTaskDraft } from '@/hooks/useTaskDraft';
 import { useVolunteer } from '@/context/VolunteerContext';
 import { REPORT_CATEGORIES, REPORT_SEVERITIES, type ReportSeverity } from '@/constants/reports';
 import { api } from '@/lib/api';
+import { getErrorMessage } from '@/lib/errors';
 import { formatCoords, getCurrentLocation } from '@/lib/location';
 import { promptReportPhoto } from '@/lib/reportPhoto';
 import { Colors, Radius, Spacing } from '@/constants/theme';
@@ -139,12 +140,16 @@ export default function NewReportScreen() {
         photo_uri: photoUri ?? undefined,
       });
 
-      await refresh({ reconcile: true });
+      try {
+        await refresh({ reconcile: true });
+      } catch (error) {
+        console.warn('Could not refresh after report:', getErrorMessage(error));
+      }
       await clearDraft();
       townAlert('Report submitted', 'Thanks for helping improve Hazaribagh.');
       navigation.goBack();
     } catch (error) {
-      townAlert('Could not submit', error instanceof Error ? error.message : 'Try again.');
+      townAlert('Could not submit', getErrorMessage(error, 'Try again.'));
     } finally {
       setLoading(false);
     }

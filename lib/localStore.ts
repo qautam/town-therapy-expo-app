@@ -1,6 +1,13 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-import { events as seedEvents } from '@/constants/data';
+import { events as seedEvents, user as seedUser } from '@/constants/data';
+import {
+  CLOUD_ADMIN_EMAIL,
+  LOCAL_ADMIN_EMAIL,
+  LOCAL_ADMIN_PASSWORD,
+  isLocalAdminEmail,
+  normalizeAdminEmail,
+} from '@/lib/adminCredentials';
 import { evaluateBadges, EMPTY_BADGE_STATS, type VolunteerBadgeStats } from '@/lib/badges';
 import { getGuestId, getGuestProfile, rotateGuestIdentity, setPendingAboutSetup, updateGuestProfile } from '@/lib/guest';
 import {
@@ -96,9 +103,33 @@ function parseEventDate(date: string, month: string, time: string) {
   return new Date(year, monthMap[month] ?? 6, parseInt(date, 10), hour, min).toISOString();
 }
 
+function createLocalAdmin(): LocalAdmin {
+  const adminId = 'local-admin';
+  const profile: Profile = {
+    id: adminId,
+    full_name: seedUser.name,
+    email: seedUser.email,
+    tagline: seedUser.tagline,
+    role: 'admin',
+    interests: seedUser.interests,
+    skills: seedUser.skills,
+    availability: seedUser.availability,
+    hours_volunteered: seedUser.stats.hours,
+    events_joined: seedUser.stats.events,
+    reports_submitted: seedUser.stats.reports,
+  };
+
+  return {
+    id: adminId,
+    email: seedUser.email,
+    password: LOCAL_ADMIN_PASSWORD,
+    profile,
+  };
+}
+
 function createDefaultDb(): LocalDb {
   return {
-    admins: [],
+    admins: [createLocalAdmin()],
     reports: [],
     events: seedEvents.map((event, index) => ({
       id: `local-event-${index + 1}`,
@@ -285,6 +316,21 @@ async function getAdminSessionId() {
   return AsyncStorage.getItem(ADMIN_SESSION_KEY);
 }
 
+async function ensureLocalAdmin(db: LocalDb): Promise<LocalDb> {
+  if (db.admins?.length) return db;
+  const next = { ...db, admins: [createLocalAdmin()] };
+  await writeDb(next);
+  return next;
+}
+
+function localAdminMatches(admin: LocalAdmin, email: string, password: string) {
+  const normalizedEmail = normalizeAdminEmail(email);
+  const storedEmail = normalizeAdminEmail(admin.email);
+  const passwordMatches = admin.password === password;
+  if (!passwordMatches) return false;
+  return storedEmail === normalizedEmail || (isLocalAdminEmail(normalizedEmail) && isLocalAdminEmail(storedEmail));
+}
+
 function formatEvent(db: LocalDb, event: LocalDb['events'][0], guestId: string | null): Event {
   const attendeeCount = db.rsvps.filter((r) => r.event_id === event.id).length;
   return {
@@ -305,15 +351,29 @@ export const localApi = {
     const adminId = await getAdminSessionId();
     if (!adminId) return { user: null, session: null };
 
-    const db = await readDb();
+    const db = await ensureLocalAdmin(await readDb());
     const admin = db.admins.find((a) => a.id === adminId);
     return admin ? { user: admin.profile, session: { userId: admin.id } } : { user: null, session: null };
   },
 
-  async adminSignIn(_email: string, _password: string) {
-    throw new Error(
-      'Admin login requires Supabase. Configure EXPO_PUBLIC_SUPABASE_URL and EXPO_PUBLIC_SUPABASE_ANON_KEY.'
-    );
+  async adminSignIn(email: string, password: string) {
+    const db = await ensureLocalAdmin(await readDb());
+    const normalizedPassword = password.trim();
+    const admin =
+      db.admins.find((candidate) => localAdminMatches(candidate, email, normalizedPassword)) ??
+      (isLocalAdminEmail(email) && normalizedPassword === LOCAL_ADMIN_PASSWORD
+        ? db.admins.find((candidate) => candidate.profile.role === 'admin')
+        : undefined);
+
+    if (!admin) {
+      throw new Error(
+        `Invalid admin email or password. Try ${LOCAL_ADMIN_EMAIL} or ${CLOUD_ADMIN_EMAIL} with password ${LOCAL_ADMIN_PASSWORD}.`
+      );
+    }
+    if (admin.profile.role !== 'admin') throw new Error('Admin access only.');
+
+    await AsyncStorage.setItem(ADMIN_SESSION_KEY, admin.id);
+    return admin.profile;
   },
 
   async adminSignOut() {

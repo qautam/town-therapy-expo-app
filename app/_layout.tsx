@@ -1,3 +1,4 @@
+import 'react-native-url-polyfill/auto';
 import 'react-native-gesture-handler';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Stack } from 'expo-router';

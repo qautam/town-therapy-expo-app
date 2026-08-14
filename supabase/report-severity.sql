@@ -14,3 +14,6 @@ begin
       check (severity in ('minor', 'moderate', 'critical'));
   end if;
 end $$;
+
+-- Make sure the API sees the new column immediately.
+notify pgrst, 'reload schema';
