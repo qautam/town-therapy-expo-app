@@ -154,10 +154,11 @@ async function uploadReportPhoto(ownerId: string, photoUri: string) {
   });
 
   if (error) {
+    const message = getErrorMessage(error, 'unknown storage error');
     throw new Error(
-      error.message.includes('Bucket not found')
+      message.toLowerCase().includes('bucket not found')
         ? 'Photo storage is not set up. Run supabase/storage.sql in the SQL Editor.'
-        : `Photo upload failed: ${error.message}`
+        : `Photo upload failed: ${message}`
     );
   }
 
@@ -1085,39 +1086,60 @@ export const api = {
 
   async createReport(guestId: string, input: CreateReportInput) {
     const guest = await localApi.getVolunteerProfile();
-    let photoUrl = input.photo_uri ?? null;
+    let photoUrl: string | null = null;
 
     if (isSupabaseConfigured && input.photo_uri) {
-      photoUrl = await uploadReportPhoto(guestId, input.photo_uri);
+      try {
+        photoUrl = await uploadReportPhoto(guestId, input.photo_uri);
+      } catch (error) {
+        // Don't block the civic report on photo storage — still save the geotagged issue.
+        console.warn('Report photo upload failed:', getErrorMessage(error));
+        photoUrl = null;
+      }
+    } else if (input.photo_uri) {
+      photoUrl = input.photo_uri;
     }
 
     if (!isSupabaseConfigured) {
-      const report = await localApi.createReport(guestId, { ...input, photo_uri: photoUrl ?? undefined });
+      const report = await localApi.createReport(guestId, {
+        ...input,
+        photo_uri: photoUrl ?? undefined,
+      });
       afterReportCreated(guestId, report);
       cacheInvalidate('home:');
       return report;
     }
 
     const supabase = getSupabase()!;
-    const { data, error } = await supabase
-      .from('reports')
-      .insert({
-        guest_id: guestId,
-        reporter_name: guest.full_name,
-        title: input.title,
-        description: input.description,
-        category: input.category,
-        severity: input.severity ?? 'moderate',
-        location_label: input.location_label,
-        latitude: input.latitude,
-        longitude: input.longitude,
-        photo_url: photoUrl,
-      })
-      .select('*')
-      .single();
+    const payload: Record<string, unknown> = {
+      guest_id: guestId,
+      reporter_name: guest.full_name || 'Volunteer',
+      title: input.title,
+      description: input.description,
+      category: input.category,
+      severity: input.severity ?? 'moderate',
+      location_label: input.location_label,
+      latitude: input.latitude,
+      longitude: input.longitude,
+      photo_url: photoUrl,
+    };
 
-    if (error) throw error;
-    await syncVolunteerStatsFromActivity(guestId);
+    let { data, error } = await supabase.from('reports').insert(payload).select('*').single();
+
+    // Older projects may not have run report-severity.sql yet.
+    if (error && isMissingColumnError(error, 'severity')) {
+      const { severity: _severity, ...withoutSeverity } = payload;
+      ({ data, error } = await supabase.from('reports').insert(withoutSeverity).select('*').single());
+    }
+
+    if (error) throw toError(error, 'Could not save this report. Check your connection and try again.');
+
+    try {
+      await syncVolunteerStatsFromActivity(guestId);
+    } catch (syncError) {
+      console.warn('Could not sync volunteer stats after report:', getErrorMessage(syncError));
+    }
+
     const report = normalizeReportRow(
       { ...(data as Report), author_name: guest.full_name },
       guestId

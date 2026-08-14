@@ -3,24 +3,29 @@
     "name": "Town Therapy",
     "slug": "town-therapy",
     "description": "Healing Hazaribagh — RANT. REPORT. REFORM",
-    "version": "1.0.0",
+    "version": "1.0.3",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "towntherapy",
     "userInterfaceStyle": "automatic",
     "backgroundColor": "#2D4F4F",
     "splash": {
+      "image": "./assets/images/splash-icon.png",
       "backgroundColor": "#2D4F4F",
       "resizeMode": "contain"
     },
     "ios": {
       "supportsTablet": true,
+      "bundleIdentifier": "club.towntherapy.app",
       "backgroundColor": "#2D4F4F",
       "splash": {
+        "image": "./assets/images/splash-icon.png",
         "backgroundColor": "#2D4F4F"
       }
     },
     "android": {
+      "package": "club.towntherapy.app",
+      "versionCode": 4,
       "adaptiveIcon": {
         "backgroundColor": "#2D4F4F",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
@@ -30,6 +35,7 @@
       "backgroundColor": "#2D4F4F",
       "softwareKeyboardLayoutMode": "resize",
       "splash": {
+        "image": "./assets/images/splash-icon.png",
         "backgroundColor": "#2D4F4F"
       },
       "predictiveBackGestureEnabled": false
@@ -44,7 +50,9 @@
       [
         "expo-splash-screen",
         {
-          "backgroundColor": "#2D4F4F"
+          "image": "./assets/images/splash-icon.png",
+          "backgroundColor": "#2D4F4F",
+          "imageWidth": 200
         }
       ],
       [
@@ -60,11 +68,10 @@
           "cameraPermission": "Town Therapy lets you take photos of issues you report."
         }
       ],
-      "expo-secure-store",
       [
         "expo-notifications",
         {
-          "icon": "./assets/images/icon.png",
+          "icon": "./assets/images/notification-icon.png",
           "color": "#2D4F4F",
           "sounds": []
         }
@@ -81,6 +88,13 @@
     ],
     "experiments": {
       "typedRoutes": true
-    }
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "487f76c9-6927-49c0-b524-9d6e8adc9ba3"
+      }
+    },
+    "owner": "town-therapy"
   }
 }

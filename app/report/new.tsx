@@ -1,5 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useNavigation } from 'expo-router';
+import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
@@ -17,13 +17,16 @@ import { KeyboardAwareScrollView } from '@/components/KeyboardAwareScrollView';
 import { PublicSafetySection } from '@/components/PublicSafetySection';
 import { useKeyboardVerticalOffset } from '@/hooks/useKeyboardVerticalOffset';
 import { useTaskDraft } from '@/hooks/useTaskDraft';
+import { useLocale } from '@/context/LocaleContext';
 import { useVolunteer } from '@/context/VolunteerContext';
 import { REPORT_CATEGORIES, REPORT_SEVERITIES, type ReportSeverity } from '@/constants/reports';
 import { api } from '@/lib/api';
 import { formatCoords, getCurrentLocation } from '@/lib/location';
 import { promptReportPhoto } from '@/lib/reportPhoto';
+import { volunteerSignupHref } from '@/lib/volunteerGate';
 import { Colors, Radius, Spacing } from '@/constants/theme';
 import { townAlert } from '@/context/TownAlertContext';
+import { getErrorMessage } from '@/lib/errors';
 
 type GeoState = {
   latitude: number;
@@ -53,8 +56,13 @@ const EMPTY_REPORT_DRAFT: ReportDraft = {
 
 export default function NewReportScreen() {
   const navigation = useNavigation();
+  const router = useRouter();
+  const { t } = useLocale();
+  const { focus } = useLocalSearchParams<{ focus?: string }>();
+  const focusSos = focus === 'sos';
   const keyboardOffset = useKeyboardVerticalOffset();
-  const { guestId, loading: volunteerLoading, refresh } = useVolunteer();
+  const { guestId, newsletter, profile, loading: volunteerLoading, refresh } = useVolunteer();
+  const isRegistered = Boolean(profile?.registered);
   const [locating, setLocating] = useState(true);
   const [locationError, setLocationError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -63,6 +71,10 @@ export default function NewReportScreen() {
     EMPTY_REPORT_DRAFT,
     { pause: loading }
   );
+
+  const goToSignup = useCallback(() => {
+    router.push(volunteerSignupHref(newsletter));
+  }, [newsletter, router]);
 
   const { title, description, categoryId, severity, photoUri, locationLabel, geo } = draft;
 
@@ -113,6 +125,18 @@ export default function NewReportScreen() {
       return;
     }
 
+    if (!isRegistered) {
+      townAlert(
+        'Almost there',
+        'Create your free volunteer profile to submit this report. Your draft is saved.',
+        [
+          { text: 'Not now', style: 'cancel' },
+          { text: 'Sign up', onPress: goToSignup },
+        ]
+      );
+      return;
+    }
+
     if (!title.trim()) {
       townAlert('Missing details', 'Add a short title describing the issue.');
       return;
@@ -128,6 +152,7 @@ export default function NewReportScreen() {
 
     setLoading(true);
     try {
+      const hadPhoto = Boolean(photoUri);
       await api.createReport(guestId, {
         title: title.trim(),
         description: description.trim(),
@@ -141,10 +166,15 @@ export default function NewReportScreen() {
 
       await refresh({ reconcile: true });
       await clearDraft();
-      townAlert('Report submitted', 'Thanks for helping improve Hazaribagh.');
+      townAlert(
+        'Report submitted',
+        hadPhoto
+          ? 'Thanks for helping improve Hazaribagh. If the photo did not upload, the report was still saved.'
+          : 'Thanks for helping improve Hazaribagh.'
+      );
       navigation.goBack();
     } catch (error) {
-      townAlert('Could not submit', error instanceof Error ? error.message : 'Try again.');
+      townAlert('Could not submit', getErrorMessage(error, 'Try again.'));
     } finally {
       setLoading(false);
     }
@@ -153,7 +183,9 @@ export default function NewReportScreen() {
     clearDraft,
     description,
     geo,
+    goToSignup,
     guestId,
+    isRegistered,
     locationLabel,
     navigation,
     photoUri,
@@ -168,141 +200,184 @@ export default function NewReportScreen() {
       <KeyboardAwareScrollView
         contentContainerStyle={styles.content}
         keyboardVerticalOffset={keyboardOffset}>
-        <Text style={styles.formHeading}>Report a civic issue</Text>
-        <Text style={styles.formSubheading}>
-          Spot a problem? Snap it, tag the place, and send it in.
-        </Text>
+        {focusSos ? (
+          <>
+            <Text style={styles.formHeading}>{t('reportNew.sosTitle')}</Text>
+            <Text style={styles.formSubheading}>{t('reportNew.sosSub')}</Text>
+            <PublicSafetySection
+              guestId={guestId}
+              geo={geo}
+              locating={locating}
+              locationError={locationError}
+              onRefreshLocation={captureLocation}
+            />
+          </>
+        ) : (
+          <>
+            <Text style={styles.formHeading}>{t('reportNew.civicTitle')}</Text>
+            <Text style={styles.formSubheading}>{t('reportNew.civicSub')}</Text>
 
-        <Text style={styles.sectionLabel}>Issue type</Text>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chips}>
-          {REPORT_CATEGORIES.map((item) => {
-            const active = categoryId === item.id;
-            return (
-              <Pressable
-                key={item.id}
-                style={[styles.chip, active && styles.chipActive]}
-                onPress={() => setDraft((current) => ({ ...current, categoryId: item.id }))}>
-                <Ionicons
-                  name={item.icon}
-                  size={16}
-                  color={active ? Colors.white : Colors.primary}
-                />
-                <Text style={[styles.chipText, active && styles.chipTextActive]}>{item.label}</Text>
+            {!volunteerLoading && !isRegistered ? (
+              <Pressable style={styles.signupGate} onPress={goToSignup}>
+                <View style={styles.signupGateIcon}>
+                  <Ionicons name="person-add-outline" size={22} color={Colors.primary} />
+                </View>
+                <View style={styles.signupGateCopy}>
+                  <Text style={styles.signupGateTitle}>{t('reportNew.signupTitle')}</Text>
+                  <Text style={styles.signupGateHint}>{t('reportNew.signupHint')}</Text>
+                </View>
+                <Ionicons name="chevron-forward" size={20} color={Colors.primary} />
               </Pressable>
-            );
-          })}
-        </ScrollView>
+            ) : null}
 
-        <Text style={styles.sectionLabel}>Severity</Text>
-        <View style={styles.severityRow}>
-          {REPORT_SEVERITIES.map((item) => {
-            const active = severity === item.id;
-            return (
-              <Pressable
-                key={item.id}
-                onPress={() => setDraft((current) => ({ ...current, severity: item.id }))}
-                style={[
-                  styles.severityButton,
-                  { borderColor: item.color, backgroundColor: item.softColor },
-                  active && { backgroundColor: item.color },
-                ]}>
-                <Text style={[styles.severityText, { color: item.color }, active && styles.severityTextActive]}>
-                  {item.label}
-                </Text>
-              </Pressable>
-            );
-          })}
-        </View>
+            <Text style={styles.sectionLabel}>{t('reportNew.issueType')}</Text>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.chips}>
+              {REPORT_CATEGORIES.map((item) => {
+                const active = categoryId === item.id;
+                return (
+                  <Pressable
+                    key={item.id}
+                    style={[styles.chip, active && styles.chipActive]}
+                    onPress={() => setDraft((current) => ({ ...current, categoryId: item.id }))}>
+                    <Ionicons
+                      name={item.icon}
+                      size={16}
+                      color={active ? Colors.white : Colors.primary}
+                    />
+                    <Text style={[styles.chipText, active && styles.chipTextActive]}>
+                      {item.label}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
 
-        <Text style={styles.sectionLabel}>Details</Text>
-        <TextInput
-          style={styles.input}
-          placeholder="Issue title"
-          placeholderTextColor={Colors.textMuted}
-          value={title}
-          onChangeText={(value) => setDraft((current) => ({ ...current, title: value }))}
-        />
-        <TextInput
-          style={[styles.input, styles.textArea]}
-          placeholder={category.placeholder}
-          placeholderTextColor={Colors.textMuted}
-          multiline
-          value={description}
-          onChangeText={(value) => setDraft((current) => ({ ...current, description: value }))}
-        />
-
-        <Text style={styles.sectionLabel}>Location</Text>
-        <View style={styles.locationCard}>
-          <View style={styles.locationHeader}>
-            <View style={styles.locationTitleRow}>
-              <Ionicons name="location" size={18} color={Colors.primary} />
-              <Text style={styles.locationTitle}>Geotagged location</Text>
+            <Text style={styles.sectionLabel}>Severity</Text>
+            <View style={styles.severityRow}>
+              {REPORT_SEVERITIES.map((item) => {
+                const active = severity === item.id;
+                return (
+                  <Pressable
+                    key={item.id}
+                    onPress={() => setDraft((current) => ({ ...current, severity: item.id }))}
+                    style={[
+                      styles.severityButton,
+                      { borderColor: item.color, backgroundColor: item.softColor },
+                      active && { backgroundColor: item.color },
+                    ]}>
+                    <Text
+                      style={[
+                        styles.severityText,
+                        { color: item.color },
+                        active && styles.severityTextActive,
+                      ]}>
+                      {item.label}
+                    </Text>
+                  </Pressable>
+                );
+              })}
             </View>
-            <Pressable style={styles.refreshButton} onPress={captureLocation} disabled={locating}>
-              {locating ? (
-                <ActivityIndicator size="small" color={Colors.white} />
+
+            <Text style={styles.sectionLabel}>Details</Text>
+            <TextInput
+              style={styles.input}
+              placeholder="Issue title"
+              placeholderTextColor={Colors.textMuted}
+              value={title}
+              onChangeText={(value) => setDraft((current) => ({ ...current, title: value }))}
+            />
+            <TextInput
+              style={[styles.input, styles.textArea]}
+              placeholder={category.placeholder}
+              placeholderTextColor={Colors.textMuted}
+              multiline
+              value={description}
+              onChangeText={(value) => setDraft((current) => ({ ...current, description: value }))}
+            />
+
+            <Text style={styles.sectionLabel}>Location</Text>
+            <View style={styles.locationCard}>
+              <View style={styles.locationHeader}>
+                <View style={styles.locationTitleRow}>
+                  <Ionicons name="location" size={18} color={Colors.primary} />
+                  <Text style={styles.locationTitle}>Geotagged location</Text>
+                </View>
+                <Pressable style={styles.refreshButton} onPress={captureLocation} disabled={locating}>
+                  {locating ? (
+                    <ActivityIndicator size="small" color={Colors.white} />
+                  ) : (
+                    <>
+                      <Ionicons name="refresh-outline" size={16} color={Colors.white} />
+                      <Text style={styles.refreshText}>Refresh</Text>
+                    </>
+                  )}
+                </Pressable>
+              </View>
+
+              {geo ? (
+                <>
+                  <Text style={styles.coords}>{formatCoords(geo.latitude, geo.longitude)}</Text>
+                  <Text style={styles.locationHint}>
+                    Pin this report to the spot you are reporting from.
+                  </Text>
+                </>
+              ) : (
+                <Text style={styles.locationError}>
+                  {locationError ?? 'Detecting your location…'}
+                </Text>
+              )}
+
+              <TextInput
+                style={[styles.input, styles.locationInput]}
+                placeholder="Landmark or address (optional edit)"
+                placeholderTextColor={Colors.textMuted}
+                value={locationLabel}
+                onChangeText={(value) =>
+                  setDraft((current) => ({ ...current, locationLabel: value }))
+                }
+              />
+            </View>
+
+            <Text style={styles.sectionLabel}>Photo evidence</Text>
+            <Pressable style={styles.photoButton} onPress={pickPhoto}>
+              <Ionicons
+                name={photoUri ? 'image-outline' : 'camera-outline'}
+                size={22}
+                color={Colors.primary}
+              />
+              <Text style={styles.photoText}>
+                {photoUri ? 'Change photo' : 'Take or upload photo'}
+              </Text>
+            </Pressable>
+            {photoUri ? (
+              <View style={styles.previewWrap}>
+                <Image source={{ uri: photoUri }} style={styles.preview} />
+                <Pressable
+                  style={styles.removePhoto}
+                  onPress={() => setDraft((current) => ({ ...current, photoUri: null }))}
+                  hitSlop={8}>
+                  <Ionicons name="close-circle" size={22} color={Colors.white} />
+                </Pressable>
+              </View>
+            ) : null}
+
+            <Pressable style={styles.submit} onPress={submit} disabled={loading || locating}>
+              {loading ? (
+                <ActivityIndicator color={Colors.white} />
               ) : (
                 <>
-                  <Ionicons name="refresh-outline" size={16} color={Colors.white} />
-                  <Text style={styles.refreshText}>Refresh</Text>
+                  <Ionicons name="megaphone-outline" size={18} color={Colors.white} />
+                  <Text style={styles.submitText}>
+                    {isRegistered ? 'Submit report' : 'Submit report (sign up next)'}
+                  </Text>
                 </>
               )}
             </Pressable>
-          </View>
-
-          {geo ? (
-            <>
-              <Text style={styles.coords}>{formatCoords(geo.latitude, geo.longitude)}</Text>
-              <Text style={styles.locationHint}>Pin this report to the spot you are reporting from.</Text>
-            </>
-          ) : (
-            <Text style={styles.locationError}>
-              {locationError ?? 'Detecting your location…'}
-            </Text>
-          )}
-
-          <TextInput
-            style={[styles.input, styles.locationInput]}
-            placeholder="Landmark or address (optional edit)"
-            placeholderTextColor={Colors.textMuted}
-            value={locationLabel}
-            onChangeText={(value) => setDraft((current) => ({ ...current, locationLabel: value }))}
-          />
-        </View>
-
-        <Text style={styles.sectionLabel}>Photo evidence</Text>
-        <Pressable style={styles.photoButton} onPress={pickPhoto}>
-          <Ionicons name={photoUri ? 'image-outline' : 'camera-outline'} size={22} color={Colors.primary} />
-          <Text style={styles.photoText}>{photoUri ? 'Change photo' : 'Take or upload photo'}</Text>
-        </Pressable>
-        {photoUri ? (
-          <View style={styles.previewWrap}>
-            <Image source={{ uri: photoUri }} style={styles.preview} />
-            <Pressable style={styles.removePhoto} onPress={() => setDraft((current) => ({ ...current, photoUri: null }))} hitSlop={8}>
-              <Ionicons name="close-circle" size={22} color={Colors.white} />
-            </Pressable>
-          </View>
-        ) : null}
-
-        <Pressable style={styles.submit} onPress={submit} disabled={loading || locating}>
-          {loading ? (
-            <ActivityIndicator color={Colors.white} />
-          ) : (
-            <>
-              <Ionicons name="megaphone-outline" size={18} color={Colors.white} />
-              <Text style={styles.submitText}>Submit report</Text>
-            </>
-          )}
-        </Pressable>
-
-        <View style={styles.divider} />
-        <PublicSafetySection
-          guestId={guestId}
-          geo={geo}
-          locating={locating}
-          locationError={locationError}
-          onRefreshLocation={captureLocation}
-        />
+          </>
+        )}
       </KeyboardAwareScrollView>
     </SafeAreaView>
   );
@@ -311,11 +386,6 @@ export default function NewReportScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.background },
   content: { padding: Spacing.lg, gap: Spacing.sm, paddingBottom: Spacing.xl },
-  divider: {
-    height: 1,
-    backgroundColor: Colors.border,
-    marginVertical: Spacing.sm,
-  },
   formHeading: {
     fontSize: 20,
     fontWeight: '800',
@@ -326,6 +396,41 @@ const styles = StyleSheet.create({
     color: Colors.textSecondary,
     lineHeight: 19,
     marginBottom: Spacing.xs,
+  },
+  signupGate: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+    backgroundColor: Colors.white,
+    borderRadius: Radius.lg,
+    borderWidth: 1.5,
+    borderColor: Colors.primaryLight,
+    padding: Spacing.md,
+    marginTop: Spacing.xs,
+    marginBottom: Spacing.sm,
+  },
+  signupGateIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.greenLight,
+  },
+  signupGateCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  signupGateTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: Colors.text,
+  },
+  signupGateHint: {
+    fontSize: 13,
+    lineHeight: 18,
+    color: Colors.textSecondary,
   },
   sectionLabel: {
     marginTop: Spacing.sm,
