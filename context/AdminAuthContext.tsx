@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { InteractionManager } from 'react-native';
 
 import { api } from '@/lib/api';
@@ -16,30 +16,45 @@ const AdminAuthContext = createContext<AdminAuthContextValue | null>(null);
 
 export function AdminAuthProvider({ children }: { children: ReactNode }) {
   const [admin, setAdmin] = useState<Profile | null>(null);
-  // Don't block first paint — admin session is rare for volunteers
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const generationRef = useRef(0);
 
-  const refresh = useCallback(async () => {
-    const session = await api.getAdminSession();
-    setAdmin(session.user?.role === 'admin' ? session.user : null);
+  const applyAdmin = useCallback((generation: number, profile: Profile | null) => {
+    if (generation !== generationRef.current) return;
+    setAdmin(profile?.role === 'admin' ? profile : null);
   }, []);
 
+  const refresh = useCallback(async () => {
+    const generation = generationRef.current;
+    const session = await api.getAdminSession();
+    applyAdmin(generation, session.user);
+  }, [applyAdmin]);
+
   useEffect(() => {
+    const startedGeneration = generationRef.current;
     const task = InteractionManager.runAfterInteractions(() => {
-      setLoading(true);
-      refresh().finally(() => setLoading(false));
+      refresh().finally(() => {
+        if (startedGeneration === generationRef.current) setLoading(false);
+      });
     });
     return () => task.cancel();
   }, [refresh]);
 
-  const signIn = useCallback(async (email: string, password: string) => {
-    const profile = await api.adminSignIn(email, password);
-    setAdmin(profile);
-  }, []);
+  const signIn = useCallback(
+    async (email: string, password: string) => {
+      const generation = ++generationRef.current;
+      const profile = await api.adminSignIn(email, password);
+      applyAdmin(generation, profile);
+      setLoading(false);
+    },
+    [applyAdmin]
+  );
 
   const signOut = useCallback(async () => {
+    generationRef.current += 1;
     await api.adminSignOut();
     setAdmin(null);
+    setLoading(false);
   }, []);
 
   const value = useMemo(

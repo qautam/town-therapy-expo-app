@@ -172,6 +172,11 @@ create policy "Admins can read own profile"
 create policy "Admins can update own profile"
   on public.profiles for update using (auth.uid() = id);
 
+-- Needed when Auth succeeds but handle_new_user did not create a row.
+create policy "Authenticated users can create own profile"
+  on public.profiles for insert
+  with check (auth.uid() = id and role = 'admin');
+
 -- Reports: anyone can read/create; admins can update status
 create policy "Reports are viewable by everyone"
   on public.reports for select using (true);

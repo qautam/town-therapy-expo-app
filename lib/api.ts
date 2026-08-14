@@ -1,6 +1,7 @@
 import { decode as decodeBase64 } from 'base64-arraybuffer';
 import * as FileSystem from 'expo-file-system/legacy';
 
+import { alternateAdminEmail, isInvalidCredentialMessage, normalizeAdminEmail } from '@/lib/adminCredentials';
 import { isSupabaseConfigured } from '@/lib/config';
 import {
   buildSosMessage,
@@ -845,6 +846,86 @@ async function notifyRequesterHelpOnWay(alert: EmergencyAlert) {
   }
 }
 
+function mapAdminSignInError(error: unknown) {
+  const message = getErrorMessage(error, 'Admin login failed. Try again.');
+  const lower = message.toLowerCase();
+  if (lower.includes('email not confirmed')) {
+    return new Error(
+      'Email not confirmed. In Supabase: Authentication → Users → open the admin → Confirm user. Or run supabase/confirm-admin.sql.'
+    );
+  }
+  if (isInvalidCredentialMessage(message)) {
+    return new Error('Wrong admin email or password.');
+  }
+  return toError(error, 'Admin login failed. Try again.');
+}
+
+async function loadOrCreateAdminProfile(user: {
+  id: string;
+  email?: string | null;
+  user_metadata?: Record<string, unknown> | null;
+}): Promise<Profile> {
+  const supabase = getSupabase()!;
+  const { data: profile, error: profileError } = await supabase
+    .from('profiles')
+    .select('*')
+    .eq('id', user.id)
+    .maybeSingle();
+
+  if (profile?.role === 'admin') return profile as Profile;
+  if (profile && profile.role !== 'admin') {
+    await supabase.auth.signOut();
+    throw new Error('Admin access only.');
+  }
+
+  const fullName =
+    (typeof user.user_metadata?.full_name === 'string' && user.user_metadata.full_name.trim()) ||
+    'Town Admin';
+
+  const { data: created } = await supabase
+    .from('profiles')
+    .insert({
+      id: user.id,
+      email: user.email ?? null,
+      full_name: fullName,
+      role: 'admin',
+    })
+    .select('*')
+    .maybeSingle();
+
+  if (created?.role === 'admin') return created as Profile;
+
+  if (profileError) {
+    throw new Error(
+      `Admin profile is missing (${profileError.message}). Run supabase/confirm-admin.sql in the Supabase SQL Editor, then try again.`
+    );
+  }
+
+  throw new Error(
+    'Admin profile is missing. Run supabase/confirm-admin.sql in the Supabase SQL Editor, then try again.'
+  );
+}
+
+async function signInAdminWithPassword(email: string, password: string) {
+  const supabase = getSupabase()!;
+  const primaryEmail = normalizeAdminEmail(email);
+  const { data, error } = await supabase.auth.signInWithPassword({
+    email: primaryEmail,
+    password,
+  });
+  if (!error && data.user) return data;
+
+  const alias = alternateAdminEmail(primaryEmail);
+  if (alias && error && isInvalidCredentialMessage(error.message)) {
+    const retry = await supabase.auth.signInWithPassword({ email: alias, password });
+    if (!retry.error && retry.data.user) return retry.data;
+    if (retry.error) throw mapAdminSignInError(retry.error);
+  }
+
+  if (error) throw mapAdminSignInError(error);
+  throw new Error('Admin login failed. Try again.');
+}
+
 export const api = {
   getGuestId,
 
@@ -857,45 +938,25 @@ export const api = {
 
     const supabase = getSupabase()!;
     const { data: sessionData } = await supabase.auth.getSession();
-    const userId = sessionData.session?.user.id;
-    if (!userId) return { user: null, session: null };
+    const user = sessionData.session?.user;
+    if (!user?.id) return { user: null, session: null };
 
-    const { data: profile } = await supabase.from('profiles').select('*').eq('id', userId).single();
-    if (!profile || profile.role !== 'admin') {
-      await supabase.auth.signOut();
-      return { user: null, session: null };
+    try {
+      const profile = await loadOrCreateAdminProfile(user);
+      return { user: profile, session: { userId: user.id } };
+    } catch (error) {
+      // Don't sign out on a missing/unreadable profile — that was wiping a successful login.
+      console.warn('Could not restore admin session:', getErrorMessage(error));
+      return { user: null, session: { userId: user.id } };
     }
-
-    return { user: profile as Profile, session: { userId } };
   },
 
   async adminSignIn(email: string, password: string) {
     if (!isSupabaseConfigured) return localApi.adminSignIn(email, password);
 
-    const supabase = getSupabase()!;
-    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-    if (error) {
-      if (error.message.toLowerCase().includes('email not confirmed')) {
-        throw new Error(
-          'Email not confirmed. In Supabase: Authentication → Users → open the admin → Confirm user. Or run supabase/confirm-admin.sql.'
-        );
-      }
-      throw error;
-    }
-
-    const { data: profile, error: profileError } = await supabase
-      .from('profiles')
-      .select('*')
-      .eq('id', data.user.id)
-      .single();
-
-    if (profileError || !profile) throw new Error('Profile not found.');
-    if (profile.role !== 'admin') {
-      await supabase.auth.signOut();
-      throw new Error('Admin access only.');
-    }
-
-    return profile as Profile;
+    const data = await signInAdminWithPassword(email, password.trim());
+    if (!data.user) throw new Error('Admin login failed. Try again.');
+    return loadOrCreateAdminProfile(data.user);
   },
 
   async adminSignOut() {

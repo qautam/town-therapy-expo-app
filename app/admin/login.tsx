@@ -15,15 +15,18 @@ import { useAdminAuth } from '@/context/AdminAuthContext';
 import { TownTherapyLogo } from '@/components/TownTherapyLogo';
 import { brand } from '@/constants/data';
 import { Colors, Radius, Spacing } from '@/constants/theme';
+import {
+  CLOUD_ADMIN_EMAIL,
+  LOCAL_ADMIN_EMAIL,
+  LOCAL_ADMIN_PASSWORD,
+} from '@/lib/adminCredentials';
 import { isSupabaseConfigured } from '@/lib/config';
 import { townAlert } from '@/context/TownAlertContext';
 
 export default function AdminLoginScreen() {
   const router = useRouter();
   const { signIn } = useAdminAuth();
-  const [email, setEmail] = useState(
-    isSupabaseConfigured ? 'admin@towntherapy.club' : 'admin@towntherapy.app'
-  );
+  const [email, setEmail] = useState(isSupabaseConfigured ? CLOUD_ADMIN_EMAIL : LOCAL_ADMIN_EMAIL);
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
 
@@ -35,7 +38,7 @@ export default function AdminLoginScreen() {
 
     setLoading(true);
     try {
-      await signIn(email.trim(), password);
+      await signIn(email.trim(), password.trim());
       router.replace('/admin');
     } catch (error) {
       townAlert('Login failed', error instanceof Error ? error.message : 'Try again.');
@@ -58,6 +61,9 @@ export default function AdminLoginScreen() {
         <TextInput
           style={styles.input}
           autoCapitalize="none"
+          autoCorrect={false}
+          autoComplete="email"
+          textContentType="username"
           keyboardType="email-address"
           placeholder="Admin email"
           placeholderTextColor={Colors.textMuted}
@@ -66,6 +72,10 @@ export default function AdminLoginScreen() {
         />
         <TextInput
           style={styles.input}
+          autoCapitalize="none"
+          autoCorrect={false}
+          autoComplete="password"
+          textContentType="password"
           secureTextEntry
           placeholder="Password"
           placeholderTextColor={Colors.textMuted}
@@ -83,8 +93,8 @@ export default function AdminLoginScreen() {
 
         <Text style={styles.hint}>
           {isSupabaseConfigured
-            ? 'Cloud admin: admin@towntherapy.club\nPassword: towntherapy'
-            : `Demo local password: towntherapy\n${brand.name} · ${brand.location}`}
+            ? `Cloud admin: ${CLOUD_ADMIN_EMAIL}\nPassword: ${LOCAL_ADMIN_PASSWORD}`
+            : `Demo local login: ${LOCAL_ADMIN_EMAIL}\nPassword: ${LOCAL_ADMIN_PASSWORD}\n${brand.name} · ${brand.location}`}
         </Text>
       </KeyboardAwareScrollView>
     </SafeAreaView>
