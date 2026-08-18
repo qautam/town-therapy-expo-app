@@ -40,3 +40,7 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+
+# local gradle cache / release artifacts
+.gradle-home/
+/dist/

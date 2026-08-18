@@ -520,7 +520,10 @@ export default function HomeScreen() {
                 showsHorizontalScrollIndicator={false}
                 decelerationRate="fast"
                 snapToInterval={262}
+                snapToAlignment="start"
                 disableIntervalMomentum
+                pagingEnabled={false}
+                nestedScrollEnabled
                 contentContainerStyle={styles.eventsScroll}>
                 {upcomingEvents.map((event) => (
                   <EventCarouselCard

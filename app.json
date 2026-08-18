@@ -3,7 +3,7 @@
     "name": "Town Therapy",
     "slug": "town-therapy",
     "description": "Healing Hazaribagh — RANT. REPORT. REFORM",
-    "version": "1.0.3",
+    "version": "1.0.6",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "towntherapy",
@@ -25,7 +25,7 @@
     },
     "android": {
       "package": "club.towntherapy.app",
-      "versionCode": 4,
+      "versionCode": 7,
       "adaptiveIcon": {
         "backgroundColor": "#2D4F4F",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
@@ -47,6 +47,16 @@
     },
     "plugins": [
       "expo-router",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "enableMinifyInReleaseBuilds": true,
+            "enableShrinkResourcesInReleaseBuilds": true,
+            "useLegacyPackaging": true
+          }
+        }
+      ],
       [
         "expo-splash-screen",
         {

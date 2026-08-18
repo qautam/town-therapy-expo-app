@@ -1,8 +1,13 @@
 /** English UI strings — source of truth for translation keys. */
 export const en = {
   // Splash / language
-  'splash.welcome': 'Town Therapy welcomes you',
-  'splash.subtitle': 'To a beautiful Hazaribagh',
+  'splash.line1': 'Town Therapy Welcomes you',
+  'splash.bridge': 'to the',
+  'splash.club': 'Someone should do something club',
+  'splash.brand': 'TOWN THERAPY',
+  'splash.tagline': 'Because someone has to care.',
+  'splash.welcome': 'Welcome to civic action',
+  'splash.subtitle': 'Hazaribagh · Rant. Report. Reform.',
   'lang.title': 'Choose your language',
   'lang.subtitle': 'You can change this anytime in You → Language.',
   'lang.english': 'English',

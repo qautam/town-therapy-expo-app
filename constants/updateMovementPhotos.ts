@@ -7,6 +7,6 @@ export const UPDATE_MOVEMENT_PHOTOS: ImageSourcePropType[] = [
   require('@/assets/updates/morning-walk.jpg'),
   require('@/assets/updates/flag-salute.jpg'),
   require('@/assets/updates/lake-evening.jpg'),
-  require('@/assets/updates/tree-canopy-ride.png'),
-  require('@/assets/updates/town-road-ride.png'),
+  require('@/assets/updates/tree-canopy-ride.jpg'),
+  require('@/assets/updates/town-road-ride.jpg'),
 ];

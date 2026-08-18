@@ -2,8 +2,13 @@ import type { EnKey } from './en';
 
 /** Hindi UI strings — must cover every English key. */
 export const hi: Record<EnKey, string> = {
-  'splash.welcome': 'टाउन थेरेपी आपका स्वागत करता है',
-  'splash.subtitle': 'एक खूबसूरत हज़ारीबाग में',
+  'splash.line1': 'Town Therapy आपका स्वागत करता है',
+  'splash.bridge': 'to the',
+  'splash.club': 'Someone should do something club',
+  'splash.brand': 'TOWN THERAPY',
+  'splash.tagline': 'क्योंकि किसी को तो परवाह करनी ही होगी।',
+  'splash.welcome': 'नागरिक कार्य में आपका स्वागत है',
+  'splash.subtitle': 'हज़ारीबाग · रेंट. रिपोर्ट. रिफ़ॉर्म.',
   'lang.title': 'अपनी भाषा चुनें',
   'lang.subtitle': 'आप इसे कभी भी आप → भाषा में बदल सकते हैं।',
   'lang.english': 'English',
